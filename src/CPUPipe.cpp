@@ -289,7 +289,7 @@ void batchnorm(const size_t channels,
     }
 }
 
-void CPUPipe::forward(const std::vector<float>& input,
+void CPUPipe::forward(const std::vector<bool>& input,
                       std::vector<float>& output_pol,
                       std::vector<float>& output_val) {
     // Input convolution
@@ -306,7 +306,9 @@ void CPUPipe::forward(const std::vector<float>& input,
     auto V = std::vector<float>(WINOGRAD_TILE * input_channels * P);
     auto M = std::vector<float>(WINOGRAD_TILE * output_channels * P);
 
-    winograd_convolve3(output_channels, input, m_conv_weights[0], V, M, conv_out);
+    auto f_input = std::vector<float>(input.size());
+    std::copy(begin(input), end(input), begin(f_input));
+    winograd_convolve3(output_channels, f_input, m_conv_weights[0], V, M, conv_out);
     batchnorm<BOARD_SQUARES>(output_channels, conv_out,
                              m_batchnorm_means[0].data(),
                              m_batchnorm_stddivs[0].data());

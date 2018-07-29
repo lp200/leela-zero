@@ -162,7 +162,7 @@ void OpenCLScheduler<net_t>::push_convolve(unsigned int filter_size,
 }
 
 template <typename net_t>
-void OpenCLScheduler<net_t>::forward(const std::vector<float>& input,
+void OpenCLScheduler<net_t>::forward(const std::vector<bool>& input,
                                      std::vector<float>& output_pol,
                                      std::vector<float>& output_val) {
     std::shared_ptr<ContextPoolEntry> ctx;

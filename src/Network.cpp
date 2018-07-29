@@ -669,11 +669,16 @@ Network::Netresult Network::get_output(
 
 Network::Netresult Network::get_output_internal(
     const GameState* const state, const int symmetry, bool selfcheck) {
+    const auto input_data = gather_features(state, symmetry);
+    return get_output_internal(input_data, symmetry, selfcheck);
+}
+
+Network::Netresult Network::get_output_internal(
+    const std::vector<bool> & input_data, const int symmetry, bool selfcheck) {
     assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
     constexpr auto width = BOARD_SIZE;
     constexpr auto height = BOARD_SIZE;
 
-    const auto input_data = gather_features(state, symmetry);
     std::vector<float> policy_data(OUTPUTS_POLICY * width * height);
     std::vector<float> value_data(OUTPUTS_VALUE * width * height);
 #ifdef USE_OPENCL_SELFCHECK
@@ -775,8 +780,8 @@ void Network::show_heatmap(const FastState* const state,
 }
 
 void Network::fill_input_plane_pair(const FullBoard& board,
-                                    std::vector<float>::iterator black,
-                                    std::vector<float>::iterator white,
+                                    std::vector<bool>::iterator black,
+                                    std::vector<bool>::iterator white,
                                     const int symmetry) {
     for (auto idx = 0; idx < BOARD_SQUARES; idx++) {
         const auto sym_idx = symmetry_nn_idx_table[symmetry][idx];
@@ -784,17 +789,17 @@ void Network::fill_input_plane_pair(const FullBoard& board,
         const auto y = sym_idx / BOARD_SIZE;
         const auto color = board.get_square(x, y);
         if (color == FastBoard::BLACK) {
-            black[idx] = float(true);
+            black[idx] = true;
         } else if (color == FastBoard::WHITE) {
-            white[idx] = float(true);
+            white[idx] = true;
         }
     }
 }
 
-std::vector<float> Network::gather_features(const GameState* const state,
+std::vector<bool> Network::gather_features(const GameState* const state,
                                             const int symmetry) {
     assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
-    auto input_data = std::vector<float>(INPUT_CHANNELS * BOARD_SQUARES);
+    auto input_data = std::vector<bool>(INPUT_CHANNELS * BOARD_SQUARES);
 
     const auto to_move = state->get_to_move();
     const auto blacks_move = to_move == FastBoard::BLACK;
@@ -819,7 +824,7 @@ std::vector<float> Network::gather_features(const GameState* const state,
                               symmetry);
     }
 
-    std::fill(to_move_it, to_move_it + BOARD_SQUARES, float(true));
+    std::fill(to_move_it, to_move_it + BOARD_SQUARES, true);
 
     return input_data;
 }

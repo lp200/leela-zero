@@ -78,7 +78,7 @@ public:
     static void show_heatmap(const FastState * const state,
                              const Netresult & netres, const bool topmoves);
 
-    static std::vector<float> gather_features(const GameState* const state,
+    static std::vector<bool> gather_features(const GameState* const state,
                                               const int symmetry);
     static std::pair<int, int> get_symmetry(const std::pair<int, int>& vertex,
                                             const int symmetry,
@@ -107,11 +107,14 @@ private:
     static void winograd_sgemm(const std::vector<float>& U,
                                const std::vector<float>& V,
                                std::vector<float>& M, const int C, const int K);
+
+    Netresult get_output_internal(const std::vector<bool> & input_data,
+                                  const int symmetry, bool selfcheck = false);
     Netresult get_output_internal(const GameState* const state,
                                   const int symmetry, bool selfcheck = false);
     static void fill_input_plane_pair(const FullBoard& board,
-                                      std::vector<float>::iterator black,
-                                      std::vector<float>::iterator white,
+                                      std::vector<bool>::iterator black,
+                                      std::vector<bool>::iterator white,
                                       const int symmetry);
     bool probe_cache(const GameState* const state, Network::Netresult& result);
     std::unique_ptr<ForwardPipe> m_forward;
