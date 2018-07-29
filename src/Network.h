@@ -83,6 +83,11 @@ public:
     static std::pair<int, int> get_symmetry(const std::pair<int, int>& vertex,
                                             const int symmetry,
                                             const int board_size = BOARD_SIZE);
+
+protected:
+    virtual Netresult get_output_internal(const std::vector<bool> & input_data,
+                                          const int symmetry, bool selfcheck = false);
+
 private:
     std::pair<int, int> load_v1_network(std::istream& wtfile);
     std::pair<int, int> load_network_file(const std::string& filename);
@@ -108,8 +113,6 @@ private:
                                const std::vector<float>& V,
                                std::vector<float>& M, const int C, const int K);
 
-    Netresult get_output_internal(const std::vector<bool> & input_data,
-                                  const int symmetry, bool selfcheck = false);
     Netresult get_output_internal(const GameState* const state,
                                   const int symmetry, bool selfcheck = false);
     static void fill_input_plane_pair(const FullBoard& board,

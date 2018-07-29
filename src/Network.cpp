@@ -299,6 +299,12 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
         }
     }
 
+    if (weightsfile == "") {
+        // no weightsfile - this is typically nonsense but some child implementations
+        // may just want to skip having weights at all.
+        return;
+    }
+
     // Load network from file
     size_t channels, residual_blocks;
     std::tie(channels, residual_blocks) = load_network_file(weightsfile);

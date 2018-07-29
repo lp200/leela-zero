@@ -31,6 +31,7 @@
 
 #include "GTP.h"
 #include "GameState.h"
+#include "DistributedNetwork.h"
 #include "Network.h"
 #include "NNCache.h"
 #include "Random.h"
@@ -49,11 +50,16 @@ static void license_blurb() {
         PROGRAM_VERSION);
 }
 
+static std::vector<std::string> cfg_serverlist;
+static int cfg_serverport = 0;
+
 static void parse_commandline(int argc, char *argv[]) {
     namespace po = boost::program_options;
     // Declare the supported options.
     po::options_description gen_desc("Generic options");
     gen_desc.add_options()
+        ("nn-server", po::value<int>(), "NN Network server mode")
+        ("nn-client", po::value<std::vector<std::string>>(), "NN Network client mode")
         ("help,h", "Show commandline options.")
         ("gtp,g", "Enable GTP mode.")
         ("threads,t", po::value<int>()->default_value(cfg_num_threads),
@@ -170,6 +176,19 @@ static void parse_commandline(int argc, char *argv[]) {
 
     if (vm.count("quiet")) {
         cfg_quiet = true;
+    }
+
+
+    if (vm.count("nn-server")) {
+        if (vm.count("nn-client")) {
+            std::cout << "Cannot be a client and a server at the same time" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        cfg_serverport = vm["nn-server"].as<int>();
+    }
+
+    if (vm.count("nn-client")) {
+        cfg_serverlist = vm["nn-client"].as<std::vector<std::string>>();
     }
 
     if (vm.count("benchmark")) {
@@ -357,15 +376,28 @@ static void parse_commandline(int argc, char *argv[]) {
 }
 
 static void initialize_network() {
-    auto network = std::make_unique<Network>();
     auto playouts = std::min(cfg_max_playouts, cfg_max_visits);
-    network->initialize(playouts, cfg_weightsfile);
+    auto network = std::unique_ptr<Network>();
+    if (cfg_serverport != 0) {
+        auto n = new DistributedNetwork(); 
+        network.reset(n);
+        network->initialize(playouts, cfg_weightsfile);
+        n->listen(cfg_serverport);
+        exit(0);
+    } else if (cfg_serverlist.empty()) {
+        network.reset(new Network());
+        network->initialize(playouts, cfg_weightsfile);
+    } else {
+        auto n = new DistributedNetwork(); 
+        n->initialize(playouts, cfg_serverlist);
+        network.reset(n);
+    }
 
     GTP::initialize(std::move(network));
 }
 
 // Setup global objects after command line has been parsed
-void init_global_objects() {
+static void init_global_objects() {
     thread_pool.initialize(cfg_num_threads);
 
     // Use deterministic random numbers for hashing
@@ -414,6 +446,9 @@ int main(int argc, char *argv[]) {
     }
 
     init_global_objects();
+
+    if (cfg_serverport != 0) {
+    }
 
     auto maingame = std::make_unique<GameState>();
 
