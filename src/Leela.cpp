@@ -31,13 +31,13 @@
 
 #include "GTP.h"
 #include "GameState.h"
-#include "DistributedNetwork.h"
 #include "Network.h"
 #include "NNCache.h"
 #include "Random.h"
 #include "ThreadPool.h"
 #include "Utils.h"
 #include "Zobrist.h"
+#include "DistributedNetwork.h"
 
 using namespace Utils;
 
@@ -97,8 +97,8 @@ static void parse_commandline(int argc, char *argv[]) {
         ("full-tuner", "Try harder to find an optimal OpenCL tuning.")
         ("tune-only", "Tune OpenCL only and then exit.")
 #ifdef USE_HALF
-        ("use-half", "Use half-precision OpenCL code.\n"
-                     "Trades off some accuracy for higher performance.")
+        ("precision", po::value<std::string>(), "Floating-point precision (single/half/auto).\n"
+                                                "Default is to auto which automatically determines which one to use.")
 #endif
         ;
 #endif
@@ -189,6 +189,10 @@ static void parse_commandline(int argc, char *argv[]) {
 
     if (vm.count("nn-client")) {
         cfg_serverlist = vm["nn-client"].as<std::vector<std::string>>();
+
+        // if nn-client mode we don't really need to constraint the number of threads
+        // because there is no nn computation locally.
+        cfg_max_threads = std::numeric_limits<int>::max();
     }
 
     if (vm.count("benchmark")) {
@@ -224,13 +228,47 @@ static void parse_commandline(int argc, char *argv[]) {
         cfg_gtp_mode = true;
     }
 
+#ifdef USE_OPENCL
+    if (vm.count("gpu")) {
+        cfg_gpus = vm["gpu"].as<std::vector<int> >();
+        // if we use OpenCL, we probably need more threads for the max so that we can saturate the GPU.
+        cfg_max_threads *= cfg_gpus.size();
+        // we can't exceed MAX_CPUS
+        cfg_max_threads = std::min(cfg_max_threads, MAX_CPUS);
+    }
+
+    if (vm.count("full-tuner")) {
+        cfg_sgemm_exhaustive = true;
+    }
+
+    if (vm.count("tune-only")) {
+        cfg_tune_only = true;
+    }
+
+#ifdef USE_HALF
+    if (vm.count("precision")) {
+        auto precision = vm["precision"].as<std::string>();
+        if ("single" == precision) {
+            cfg_precision = precision_t::SINGLE;
+        } else if ("half" == precision) {
+            cfg_precision = precision_t::HALF;
+        } else if ("auto" == precision) {
+            cfg_precision = precision_t::AUTO;
+        } else {
+            printf("Unexpected option for --precision, expecting single/half/auto\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+#endif
+#endif
+
     if (!vm["threads"].defaulted()) {
         auto num_threads = vm["threads"].as<int>();
         if (num_threads > cfg_max_threads) {
             myprintf("Clamping threads to maximum = %d\n", cfg_max_threads);
-        } else if (num_threads != cfg_num_threads) {
-            cfg_num_threads = num_threads;
+            num_threads = cfg_max_threads;
         }
+        cfg_num_threads = num_threads;
     }
     myprintf("Using %d thread(s).\n", cfg_num_threads);
 
@@ -328,27 +366,6 @@ static void parse_commandline(int argc, char *argv[]) {
             cfg_lagbuffer_cs = lagbuffer;
         }
     }
-
-#ifdef USE_OPENCL
-    if (vm.count("gpu")) {
-        cfg_gpus = vm["gpu"].as<std::vector<int> >();
-    }
-
-    if (vm.count("full-tuner")) {
-        cfg_sgemm_exhaustive = true;
-    }
-
-    if (vm.count("tune-only")) {
-        cfg_tune_only = true;
-    }
-
-#ifdef USE_HALF
-    if (vm.count("use-half")) {
-        cfg_use_half = true;
-    }
-#endif
-#endif
-
     if (vm.count("benchmark")) {
         // These must be set later to override default arguments.
         cfg_allow_pondering = false;
@@ -365,6 +382,7 @@ static void parse_commandline(int argc, char *argv[]) {
         }
     }
 
+
     auto out = std::stringstream{};
     for (auto i = 1; i < argc; i++) {
         out << " " << argv[i];
@@ -379,7 +397,7 @@ static void initialize_network() {
     auto playouts = std::min(cfg_max_playouts, cfg_max_visits);
     auto network = std::unique_ptr<Network>();
     if (cfg_serverport != 0) {
-        auto n = new DistributedNetwork(); 
+        auto n = new DistributedServerNetwork(); 
         network.reset(n);
         network->initialize(playouts, cfg_weightsfile);
         n->listen(cfg_serverport);
@@ -388,9 +406,10 @@ static void initialize_network() {
         network.reset(new Network());
         network->initialize(playouts, cfg_weightsfile);
     } else {
-        auto n = new DistributedNetwork(); 
+        auto n = new DistributedClientNetwork(); 
         n->initialize(playouts, cfg_serverlist);
         network.reset(n);
+        network->initialize(playouts, cfg_weightsfile);
     }
 
     GTP::initialize(std::move(network));

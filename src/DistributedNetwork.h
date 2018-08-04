@@ -28,63 +28,21 @@
 #include <algorithm>
 #include <vector>
 
+
+#include "Utils.h"
 #include "SMP.h"
 
 #include "Network.h"
 
-class DistributedNetwork : public Network
+class DistributedClientNetwork : public Network
 {
 
 private:
     std::deque<boost::asio::ip::tcp::socket> m_sockets;
     SMP::Mutex m_socket_mutex;
-public:
-    void initialize(int playouts, const std::vector<std::string> & serverlist) {
-        using boost::asio::ip::tcp;
 
-        Network::initialize(playouts, "");
-
-        for (auto x : serverlist) {
-            std::vector<std::string> x2;
-            boost::split(x2, x, boost::is_any_of(":"));
-            if(x2.size() != 2) {
-                printf("Error in --nn-client argument parsing : Expecting [server]:[port] syntax\n");
-                printf("(got %s\n", x.c_str());
-                throw std::runtime_error("Malformed --nn-client argument ");
-            }
-        
-            auto addr = x2[0];
-            auto port = x2[1];
-
-            boost::asio::io_service io_service;
-    
-            tcp::resolver resolver(io_service);
-            tcp::resolver::query query(addr, port);
-            auto endpoints = resolver.resolve(query);
-    
-            const auto num_threads = (cfg_num_threads + serverlist.size() - 1) / serverlist.size();
-
-            for(auto i=size_t{0}; i<num_threads; i++) {
-                tcp::socket socket(io_service);
-                boost::asio::connect(socket, endpoints);
-                m_sockets.emplace_back(std::move(socket));
-            }
-        }
-    }
-protected:
-    virtual Netresult get_output_internal(const std::vector<bool> & input_data,
-                                          const int symmetry, bool selfcheck = false) {
-        if (selfcheck) {
-            return Network::get_output_internal(input_data, symmetry, true);
-        }
-        using boost::asio::ip::tcp;
-
-        LOCK(m_socket_mutex, lock);
-        assert(!m_sockets.empty());
-
-        auto socket = std::move(m_sockets.front());
-        m_sockets.pop_front();
-        lock.unlock();
+    std::vector<float> get_output_from_socket(const std::vector<bool> & input_data,
+                                              const int symmetry, boost::asio::ip::tcp::socket & socket) {
 
         std::vector<char> input_data_ch(input_data.size() + 1); // input_data (18*361) + symmetry
         assert(input_data_ch.size() == INPUT_CHANNELS * BOARD_SQUARES + 1);
@@ -106,7 +64,87 @@ protected:
             std::cerr << e.what() << std::endl;
             throw;
         }
+        return output_data_f;
+    }
+public:
+    void initialize(int playouts, const std::vector<std::string> & serverlist) {
+        Network::initialize(playouts, "");
 
+        int retry_attempt = 5;
+        for (auto i=0; i<retry_attempt; i++) {
+            if (m_sockets.size() >= static_cast<size_t>(cfg_num_threads)) {
+                break;
+            }
+            init_servers(serverlist);
+        }
+        if (m_sockets.size() < static_cast<size_t>(cfg_num_threads)) {
+            printf("Error in --nn-client : cannot create enough threads from the given clients (created %ld)\n", m_sockets.size());
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    void init_servers(const std::vector<std::string> & serverlist) {
+        using boost::asio::ip::tcp;
+
+        const auto num_threads = (cfg_num_threads - m_sockets.size() + serverlist.size() - 1) / serverlist.size();
+        for (auto x : serverlist) {
+            std::vector<std::string> x2;
+            boost::split(x2, x, boost::is_any_of(":"));
+            if(x2.size() != 2) {
+                printf("Error in --nn-client argument parsing : Expecting [server]:[port] syntax\n");
+                printf("(got %s\n", x.c_str());
+                throw std::runtime_error("Malformed --nn-client argument ");
+            }
+        
+            auto addr = x2[0];
+            auto port = x2[1];
+
+            boost::asio::io_service io_service;
+    
+            tcp::resolver resolver(io_service);
+            tcp::resolver::query query(addr, port);
+            auto endpoints = resolver.resolve(query);
+    
+
+            for(auto i=size_t{0}; i<num_threads; i++) {
+                tcp::socket socket(io_service);
+                boost::asio::connect(socket, endpoints);
+                // try a dummy call
+
+                try {
+                    GameState gs;
+                    gs.init_game(BOARD_SIZE, 7.5);
+                    std::vector<bool> dummy_input = gather_features(&gs, 0);
+                    get_output_from_socket(dummy_input, 0, socket);
+                } catch (...) {
+                    // doesn't work. Probably remote side ran out of threads.
+                    // drop socket.
+                    Utils::myprintf("NN client dropped to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
+                    continue;
+                }
+                m_sockets.emplace_back(std::move(socket));
+
+                Utils::myprintf("NN client connected to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
+            }
+        }
+    }
+
+protected:
+    virtual Netresult get_output_internal(const std::vector<bool> & input_data,
+                                          const int symmetry, bool selfcheck = false) {
+        if (selfcheck) {
+            return Network::get_output_internal(input_data, symmetry, true);
+        }
+        using boost::asio::ip::tcp;
+
+        LOCK(m_socket_mutex, lock);
+        assert(!m_sockets.empty());
+
+        auto socket = std::move(m_sockets.front());
+        m_sockets.pop_front();
+        lock.unlock();
+
+        auto output_data_f = get_output_from_socket(input_data, symmetry, socket);
         {
             LOCK(m_socket_mutex, lock2);
             m_sockets.push_back(std::move(socket));
@@ -119,22 +157,45 @@ protected:
 
         return ret;
     }
+};
+
+
+class DistributedServerNetwork : public Network
+{
 public:
     void listen(int portnum) {
         using boost::asio::ip::tcp;
         try {
             boost::asio::io_service io_service;
+            std::atomic<int> num_threads{0};
     
             tcp::acceptor acceptor(io_service, tcp::endpoint(tcp::v4(), portnum));
+            Utils::myprintf("NN server listening on port %d\n", portnum);
     
             for (;;)
             {
                 tcp::socket socket(io_service);
                 acceptor.accept(socket);
+
+                int v = num_threads++;
+                if(v >= cfg_num_threads) {
+                    --num_threads;
+                    Utils::myprintf("Dropping connection from %s due to too many threads\n",
+                         socket.remote_endpoint().address().to_string().c_str()
+                    );
+                    socket.shutdown(tcp::socket::shutdown_send);
+                    socket.shutdown(tcp::socket::shutdown_receive);
+                    socket.close();
+                    continue;
+                }
     
+                Utils::myprintf("NN server connection established from %s (thread %d, max %d)\n",
+                         socket.remote_endpoint().address().to_string().c_str(), v, cfg_num_threads
+                );
+
                 std::thread t(
                     std::bind(
-                        [this](tcp::socket & socket) {
+                        [&num_threads, this](tcp::socket & socket) {
                             while (true) {
                                 std::array<char,  INPUT_CHANNELS * BOARD_SQUARES + 1> buf;
     
@@ -160,6 +221,11 @@ public:
                                 else if (error)
                                     throw boost::system::system_error(error); // Some other error.
                             }
+
+                            Utils::myprintf("NN server connection closed from %s\n",
+                                     socket.remote_endpoint().address().to_string().c_str()
+                            );
+                            num_threads--;
                         },
                         std::move(socket)
                     )

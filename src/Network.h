@@ -73,13 +73,16 @@ public:
     static constexpr auto OUTPUTS_VALUE = 1;
 
     void initialize(int playouts, const std::string & weightsfile);
+
+    static std::vector<bool> gather_features(const GameState* const state,
+                                              const int symmetry);
+
+    float benchmark_time(int centiseconds);
     void benchmark(const GameState * const state,
                    const int iterations = 1600);
     static void show_heatmap(const FastState * const state,
                              const Netresult & netres, const bool topmoves);
 
-    static std::vector<bool> gather_features(const GameState* const state,
-                                              const int symmetry);
     static std::pair<int, int> get_symmetry(const std::pair<int, int>& vertex,
                                             const int symmetry,
                                             const int board_size = BOARD_SIZE);
