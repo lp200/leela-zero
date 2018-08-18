@@ -78,18 +78,27 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
         auto port = x2[1];
 
         boost::asio::io_service io_service;
-
         tcp::resolver resolver(io_service);
-        tcp::resolver::query query(addr, port);
-        auto endpoints = resolver.resolve(query);
+
+        // these are deprecated in latest boost but still a quite recent Ubuntu distribution
+        // doesn't support the alternative newer interface.
+        decltype(resolver)::iterator endpoints;
+        decltype(resolver)::query query(addr, port);
+        try {
+            endpoints = resolver.resolve(query);
+        } catch (...) {
+            Utils::myprintf("Cannot resolve server address %s port %s\n", addr.c_str(), port.c_str());
+            // cannot resolve server - probably server dead
+            break;
+        }
 
 
         for(auto i=size_t{0}; i<num_threads; i++) {
             tcp::socket socket(io_service);
-            boost::asio::connect(socket, endpoints);
-            // try a dummy call
 
+            // try a dummy call
             try {
+                boost::asio::connect(socket, endpoints);
                 GameState gs;
                 gs.init_game(BOARD_SIZE, 7.5);
                 std::vector<bool> dummy_input = gather_features(&gs, 0);
@@ -168,6 +177,8 @@ void DistributedServerNetwork::listen(int portnum) {
             std::thread t(
                 std::bind(
                     [&num_threads, this](tcp::socket & socket) {
+
+                        auto remote_endpoint = socket.remote_endpoint().address().to_string();
                         while (true) {
                             std::array<char,  INPUT_CHANNELS * BOARD_SQUARES + 1> buf;
 
@@ -177,7 +188,7 @@ void DistributedServerNetwork::listen(int portnum) {
                                 break; // Connection closed cleanly by peer.
                             else if (error) {
                                 Utils::myprintf("Socket read failed with message : %s\n",
-                                                error.message()
+                                                error.message().c_str()
                                 );
                                 break;
                             }
@@ -197,15 +208,13 @@ void DistributedServerNetwork::listen(int portnum) {
                                 break; // Connection closed cleanly by peer.
                             else if (error) {
                                 Utils::myprintf("Socket write failed with message : %s\n",
-                                                error.message()
+                                                error.message().c_str()
                                 );
                                 break;
                             }
                         }
 
-                        Utils::myprintf("NN server connection closed from %s\n",
-                                 socket.remote_endpoint().address().to_string().c_str()
-                        );
+                        Utils::myprintf("NN server connection closed from %s\n", remote_endpoint.c_str());
                         num_threads--;
                     },
                     std::move(socket)
