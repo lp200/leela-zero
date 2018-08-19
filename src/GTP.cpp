@@ -78,6 +78,7 @@ bool cfg_quiet;
 std::string cfg_options_str;
 bool cfg_benchmark;
 bool cfg_cpu_only;
+bool cfg_nn_client_verbose;
 int cfg_analyze_interval_centis;
 
 std::unique_ptr<Network> GTP::s_network;
@@ -128,6 +129,7 @@ void GTP::setup_default_parameters() {
 #else
     cfg_cpu_only = false;
 #endif
+    cfg_nn_client_verbose = false;
 
     cfg_analyze_interval_centis = 0;
 

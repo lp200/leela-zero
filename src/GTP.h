@@ -65,6 +65,7 @@ extern bool cfg_quiet;
 extern std::string cfg_options_str;
 extern bool cfg_benchmark;
 extern bool cfg_cpu_only;
+extern bool cfg_nn_client_verbose;
 extern int cfg_analyze_interval_centis;
 
 /*

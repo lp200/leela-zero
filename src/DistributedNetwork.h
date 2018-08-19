@@ -40,10 +40,11 @@ private:
     std::deque<boost::asio::ip::tcp::socket> m_sockets;
     std::atomic<size_t> m_active_socket_count{0};
     SMP::Mutex m_socket_mutex;
+    std::vector<std::string> m_serverlist;
 
     std::vector<float> get_output_from_socket(const std::vector<bool> & input_data,
                                               const int symmetry, boost::asio::ip::tcp::socket & socket);
-    std::vector<std::string> m_serverlist;
+
 public:
     void initialize(int playouts, const std::vector<std::string> & serverlist);
     void init_servers(const std::vector<std::string> & serverlist);

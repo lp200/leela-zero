@@ -21,6 +21,12 @@
 
 using boost::asio::ip::tcp;
 
+template <typename... T> static void netprintf(const char * fmt, T... params) {
+    if (cfg_nn_client_verbose) {
+        Utils::myprintf(fmt, params...);
+    }
+}
+
 std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::vector<bool> & input_data,
                                           const int symmetry, boost::asio::ip::tcp::socket & socket) {
 
@@ -97,7 +103,7 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
         try {
             endpoints = resolver.resolve(query);
         } catch (...) {
-            Utils::myprintf("Cannot resolve server address %s port %s\n", addr.c_str(), port.c_str());
+            netprintf("Cannot resolve server address %s port %s\n", addr.c_str(), port.c_str());
             // cannot resolve server - probably server dead
             break;
         }
@@ -116,13 +122,13 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
             } catch (...) {
                 // doesn't work. Probably remote side ran out of threads.
                 // drop socket.
-                Utils::myprintf("NN client dropped to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
+                netprintf("NN client dropped to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
                 continue;
             }
             m_sockets.emplace_back(std::move(socket));
             m_active_socket_count++;
 
-            Utils::myprintf("NN client connected to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
+            netprintf("NN client connected to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
         }
 
     }

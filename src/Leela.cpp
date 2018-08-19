@@ -60,6 +60,7 @@ static void parse_commandline(int argc, char *argv[]) {
     gen_desc.add_options()
         ("nn-server", po::value<int>(), "NN Network server mode")
         ("nn-client", po::value<std::vector<std::string>>(), "NN Network client mode")
+        ("nn-client-verbose", "NN Network client mode : verbose message")
         ("help,h", "Show commandline options.")
         ("gtp,g", "Enable GTP mode.")
         ("threads,t", po::value<int>()->default_value(cfg_num_threads),
@@ -180,6 +181,9 @@ static void parse_commandline(int argc, char *argv[]) {
 
 
     if (vm.count("nn-server")) {
+        if (vm.count("nn-client-verbose")) {
+            cfg_nn_client_verbose = true;
+        }
         if (vm.count("nn-client")) {
             std::cout << "Cannot be a client and a server at the same time" << std::endl;
             exit(EXIT_FAILURE);
