@@ -50,17 +50,9 @@ void DistributedClientNetwork::initialize(int playouts, const std::vector<std::s
     m_serverlist = serverlist;
     Network::initialize(playouts, "");
 
-    int retry_attempt = 5;
-    for (auto i=0; i<retry_attempt; i++) {
-        if (m_active_socket_count.load() >= static_cast<size_t>(cfg_num_threads)) {
-            break;
-        }
-        init_servers(serverlist);
-    }
-    if (m_active_socket_count.load() < static_cast<size_t>(cfg_num_threads)) {
-        printf("Error in --nn-client : cannot create enough threads from the given clients (created %ld)\n", m_sockets.size());
-        exit(EXIT_FAILURE);
-    }
+    // if this didn't create enough threads, the background thread will retry creating more and more
+    // if it never creates enough threads, local capability (be it CPU or GPU) will be used
+    init_servers(serverlist);
 
     // create a background thread which tries to create new connectins if some are dead.
     // thread stays active forever, hence if somebody wants to have capability of destroying
@@ -145,13 +137,9 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
 
     LOCK(m_socket_mutex, lock);
     if (m_sockets.empty()) {
-        // if we don't have enough sockets, wait 10ms and try again later.
-        // hopefully the 'thread-fork daemon' will create more.
+        // if we don't have enough sockets, use local machine capability as backup
         lock.unlock();
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(10)
-        );
-        return get_output_internal(input_data, symmetry, selfcheck);
+        return Network::get_output_internal(input_data, symmetry, selfcheck);
     }
 
     // XXX : moving a closed socket will segfault.  Think what we should do?
@@ -164,10 +152,11 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
     try {
         output_data_f = get_output_from_socket(input_data, symmetry, socket);
     } catch (...) {
-        // socket is dead for some reason.  Try again with new socket.
+        // socket is dead for some reason.  Throw it away and use local machine
+        // capability as a backup
         assert(m_active_socket_count.load() > 0);
         m_active_socket_count--;
-        return get_output_internal(input_data, symmetry, selfcheck);
+        return Network::get_output_internal(input_data, symmetry, selfcheck);
     }
 
     {
