@@ -47,19 +47,38 @@ std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::v
     return output_data_f;
 }
 void DistributedClientNetwork::initialize(int playouts, const std::vector<std::string> & serverlist) {
+    m_serverlist = serverlist;
     Network::initialize(playouts, "");
 
     int retry_attempt = 5;
     for (auto i=0; i<retry_attempt; i++) {
-        if (m_sockets.size() >= static_cast<size_t>(cfg_num_threads)) {
+        if (m_active_socket_count.load() >= static_cast<size_t>(cfg_num_threads)) {
             break;
         }
         init_servers(serverlist);
     }
-    if (m_sockets.size() < static_cast<size_t>(cfg_num_threads)) {
+    if (m_active_socket_count.load() < static_cast<size_t>(cfg_num_threads)) {
         printf("Error in --nn-client : cannot create enough threads from the given clients (created %ld)\n", m_sockets.size());
         exit(EXIT_FAILURE);
     }
+
+    // create a background thread which tries to create new connectins if some are dead.
+    // thread stays active forever, hence if somebody wants to have capability of destroying
+    // hets in the middle of a run, this thread should also be safely killed...
+    std::thread t(
+        [this]() {
+            while (true) {
+                std::this_thread::sleep_for(
+                    std::chrono::seconds(1)
+                );
+                if (m_active_socket_count.load() < static_cast<size_t>(cfg_num_threads)) {
+                    LOCK(m_socket_mutex, lock);
+                    init_servers(m_serverlist);
+                }
+            }
+        }
+    );
+    t.detach();
 }
 
 void DistributedClientNetwork::init_servers(const std::vector<std::string> & serverlist) {
@@ -77,8 +96,7 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
         auto addr = x2[0];
         auto port = x2[1];
 
-        boost::asio::io_service io_service;
-        tcp::resolver resolver(io_service);
+        tcp::resolver resolver(m_io_service);
 
         // these are deprecated in latest boost but still a quite recent Ubuntu distribution
         // doesn't support the alternative newer interface.
@@ -93,8 +111,8 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
         }
 
 
-        for(auto i=size_t{0}; i<num_threads; i++) {
-            tcp::socket socket(io_service);
+        for (auto i=size_t{0}; i<num_threads; i++) {
+            tcp::socket socket(m_io_service);
 
             // try a dummy call
             try {
@@ -110,9 +128,11 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
                 continue;
             }
             m_sockets.emplace_back(std::move(socket));
+            m_active_socket_count++;
 
             Utils::myprintf("NN client connected to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
         }
+
     }
 }
 
@@ -124,13 +144,32 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
     }
 
     LOCK(m_socket_mutex, lock);
-    assert(!m_sockets.empty());
+    if (m_sockets.empty()) {
+        // if we don't have enough sockets, wait 10ms and try again later.
+        // hopefully the 'thread-fork daemon' will create more.
+        lock.unlock();
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(10)
+        );
+        return get_output_internal(input_data, symmetry, selfcheck);
+    }
 
+    // XXX : moving a closed socket will segfault.  Think what we should do?
     auto socket = std::move(m_sockets.front());
     m_sockets.pop_front();
     lock.unlock();
 
-    auto output_data_f = get_output_from_socket(input_data, symmetry, socket);
+    std::vector<float> output_data_f;
+
+    try {
+        output_data_f = get_output_from_socket(input_data, symmetry, socket);
+    } catch (...) {
+        // socket is dead for some reason.  Try again with new socket.
+        assert(m_active_socket_count.load() > 0);
+        m_active_socket_count--;
+        return get_output_internal(input_data, symmetry, selfcheck);
+    }
+
     {
         LOCK(m_socket_mutex, lock2);
         m_sockets.push_back(std::move(socket));
@@ -147,15 +186,14 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
 
 void DistributedServerNetwork::listen(int portnum) {
     try {
-        boost::asio::io_service io_service;
         std::atomic<int> num_threads{0};
 
-        tcp::acceptor acceptor(io_service, tcp::endpoint(tcp::v4(), portnum));
+        tcp::acceptor acceptor(m_io_service, tcp::endpoint(tcp::v4(), portnum));
         Utils::myprintf("NN server listening on port %d\n", portnum);
 
         for (;;)
         {
-            tcp::socket socket(io_service);
+            tcp::socket socket(m_io_service);
             acceptor.accept(socket);
 
             int v = num_threads++;
