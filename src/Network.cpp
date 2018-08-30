@@ -278,7 +278,17 @@ std::pair<int, int> Network::load_v1_network(std::istream& wtfile) {
     return {channels, static_cast<int>(residual_blocks)};
 }
 
+
 std::pair<int, int> Network::load_network_file(const std::string& filename) {
+    auto compute_hash = [] (std::uint64_t hash, const char * buf, std::size_t sz) -> std::uint64_t {
+        for(auto i = std::size_t{0}; i < sz; i++) {
+            hash = (hash >> 1) | (hash << 63);
+            hash = hash ^ buf[i];
+        }
+        return hash;
+    };
+
+
     // gzopen supports both gz and non-gz files, will decompress
     // or just read directly as needed.
     auto gzhandle = gzopen(filename.c_str(), "rb");
@@ -290,6 +300,8 @@ std::pair<int, int> Network::load_network_file(const std::string& filename) {
     auto buffer = std::stringstream{};
     constexpr auto chunkBufferSize = 64 * 1024;
     std::vector<char> chunkBuffer(chunkBufferSize);
+
+    auto hash = std::uint64_t{0};
     while (true) {
         auto bytesRead = gzread(gzhandle, chunkBuffer.data(), chunkBufferSize);
         if (bytesRead == 0) break;
@@ -300,8 +312,10 @@ std::pair<int, int> Network::load_network_file(const std::string& filename) {
         }
         assert(bytesRead <= chunkBufferSize);
         buffer.write(chunkBuffer.data(), bytesRead);
+        hash = compute_hash(hash, chunkBuffer.data(), bytesRead);
     }
     gzclose(gzhandle);
+    m_nethash = hash;
 
     // Read format version
     auto line = std::string{};
@@ -908,4 +922,8 @@ std::pair<int, int> Network::get_symmetry(const std::pair<int, int>& vertex,
     assert(y >= 0 && y < board_size);
     assert(symmetry != IDENTITY_SYMMETRY || vertex == std::make_pair(x, y));
     return {x, y};
+}
+
+std::uint64_t Network::get_net_hash() {
+    return m_nethash;
 }

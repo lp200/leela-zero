@@ -16,6 +16,8 @@
     along with Leela Zero.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <iostream>
+
 #include "GTP.h"
 #include "DistributedNetwork.h"
 
@@ -26,7 +28,6 @@ template <typename... T> static void netprintf(const char * fmt, T... params) {
         Utils::myprintf(fmt, params...);
     }
 }
-
 std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::vector<bool> & input_data,
                                           const int symmetry, boost::asio::ip::tcp::socket & socket) {
 
@@ -115,10 +116,23 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
             // try a dummy call
             try {
                 boost::asio::connect(socket, endpoints);
-                GameState gs;
-                gs.init_game(BOARD_SIZE, 7.5);
-                std::vector<bool> dummy_input = gather_features(&gs, 0);
-                get_output_from_socket(dummy_input, 0, socket);
+                std::array<std::uint64_t,1> my_hash {get_net_hash()};
+                std::array<std::uint64_t,1> remote_hash {0};
+
+                boost::system::error_code error;
+                boost::asio::write(socket, boost::asio::buffer(my_hash), error);
+                if (error)
+                    throw boost::system::system_error(error); // Some other error.
+        
+                boost::asio::read(socket, boost::asio::buffer(remote_hash), error);
+                if (error)
+                    throw boost::system::system_error(error); // Some other error.
+
+		if(my_hash[0] != remote_hash[0]) {
+                    netprintf(
+                        "NN client dropped to server %s port %s (hash mismatch, remote=%llx, local=%llx)\n", addr.c_str(), port.c_str(), remote_hash[0], my_hash[0]);
+                    continue;
+                }
             } catch (...) {
                 // doesn't work. Probably remote side ran out of threads.
                 // drop socket.
@@ -212,6 +226,20 @@ void DistributedServerNetwork::listen(int portnum) {
                     [&num_threads, this](tcp::socket & socket) {
 
                         auto remote_endpoint = socket.remote_endpoint().address().to_string();
+
+                        std::array<std::uint64_t, 1> my_hash{get_net_hash()};
+                        std::array<std::uint64_t, 1> remote_hash {0};
+                        boost::system::error_code error;
+                        
+                        boost::asio::read(socket, boost::asio::buffer(remote_hash), error);
+                        if (error)
+                            throw boost::system::system_error(error); // Some other error.
+                
+                        boost::asio::write(socket, boost::asio::buffer(my_hash), error);
+                        if (error)
+                            throw boost::system::system_error(error); // Some other error.
+
+
                         while (true) {
                             std::array<char,  INPUT_CHANNELS * NUM_INTERSECTIONS + 1> buf;
 

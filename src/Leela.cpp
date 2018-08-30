@@ -182,9 +182,7 @@ static void parse_commandline(int argc, char *argv[]) {
 
 
     if (vm.count("nn-server")) {
-        if (vm.count("nn-client-verbose")) {
-            cfg_nn_client_verbose = true;
-        }
+
         if (vm.count("nn-client")) {
             std::cout << "Cannot be a client and a server at the same time" << std::endl;
             exit(EXIT_FAILURE);
@@ -198,6 +196,10 @@ static void parse_commandline(int argc, char *argv[]) {
         // if nn-client mode we don't really need to constraint the number of threads
         // because there is no nn computation locally.
         cfg_max_threads = std::numeric_limits<int>::max();
+
+        if (vm.count("nn-client-verbose")) {
+            cfg_nn_client_verbose = true;
+        }
     }
 
     if (vm.count("benchmark")) {

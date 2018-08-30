@@ -88,6 +88,7 @@ public:
                                             const int symmetry,
                                             const int board_size = BOARD_SIZE);
 
+    std::uint64_t get_net_hash();
 protected:
     virtual Netresult get_output_internal(const std::vector<bool> & input_data,
                                           const int symmetry, bool selfcheck = false);
@@ -131,6 +132,7 @@ private:
 
 #endif
 
+    std::uint64_t m_nethash;
     NNCache m_nncache;
 
     // Input + residual block tower
