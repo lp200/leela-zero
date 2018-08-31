@@ -26,7 +26,6 @@
 Game::Game(const QString& weights, const QString& opt, const QString& binary,
            const QStringList& commands) :
     QProcess(),
-    m_cmdLine(""),
     m_binary(binary),
     m_commands(commands),
     m_resignation(false),
