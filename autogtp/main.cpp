@@ -51,6 +51,10 @@ int main(int argc, char *argv[]) {
         {"n", "nnclient"},
               "NN client mode - server address",
               "string", "");
+    QCommandLineOption precisionOption (
+        {"p", "precision"},
+              "Precision (half/single/auto)",
+              "string", "");
     QCommandLineOption gamesNumOption(
         {"g", "gamesNum"},
               "Play 'gamesNum' games on one GPU at the same time.",
@@ -83,6 +87,7 @@ int main(int argc, char *argv[]) {
                           "");
 
     parser.addOption(nnClientOption);
+    parser.addOption(precisionOption);
     parser.addOption(gamesNumOption);
     parser.addOption(gpusOption);
     parser.addOption(keepSgfOption);
@@ -96,6 +101,7 @@ int main(int argc, char *argv[]) {
     parser.process(app);
 
     QString servername = parser.value(nnClientOption);
+    QString precision = parser.value(precisionOption);
     int gamesNum = parser.value(gamesNumOption).toInt();
     QStringList gpusList = parser.values(gpusOption);
     int gpusNum = gpusList.count();
@@ -148,7 +154,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
     Management *boss = new Management(gpusNum, gamesNum, gpusList, AUTOGTP_VERSION, maxNum,
-                                      servername,
+                                      servername, precision,
                                       parser.isSet(eraseOption), parser.value(keepSgfOption),
                                       parser.value(keepDebugOption));
     QObject::connect(&app, &QCoreApplication::aboutToQuit, boss, &Management::storeGames);
