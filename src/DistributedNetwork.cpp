@@ -31,11 +31,11 @@ std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::v
                                           const int symmetry, boost::asio::ip::tcp::socket & socket) {
 
     std::vector<char> input_data_ch(input_data.size() + 1); // input_data (18*361) + symmetry
-    assert(input_data_ch.size() == INPUT_CHANNELS * BOARD_SQUARES + 1);
+    assert(input_data_ch.size() == INPUT_CHANNELS * NUM_INTERSECTIONS + 1);
     std::copy(begin(input_data), end(input_data), begin(input_data_ch));
     input_data_ch[input_data_ch.size()-1] = symmetry;
 
-    std::vector<float> output_data_f(BOARD_SQUARES + 2);
+    std::vector<float> output_data_f(NUM_INTERSECTIONS + 2);
     try {
         boost::system::error_code error;
         boost::asio::write(socket, boost::asio::buffer(input_data_ch), error);
@@ -171,9 +171,9 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
     }
 
     Network::Netresult ret;
-    std::copy(begin(output_data_f), begin(output_data_f) + BOARD_SQUARES, begin(ret.policy));
-    ret.policy_pass = output_data_f[BOARD_SQUARES];
-    ret.winrate = output_data_f[BOARD_SQUARES + 1];
+    std::copy(begin(output_data_f), begin(output_data_f) + NUM_INTERSECTIONS, begin(ret.policy));
+    ret.policy_pass = output_data_f[NUM_INTERSECTIONS];
+    ret.winrate = output_data_f[NUM_INTERSECTIONS + 1];
 
     return ret;
 }
@@ -213,7 +213,7 @@ void DistributedServerNetwork::listen(int portnum) {
 
                         auto remote_endpoint = socket.remote_endpoint().address().to_string();
                         while (true) {
-                            std::array<char,  INPUT_CHANNELS * BOARD_SQUARES + 1> buf;
+                            std::array<char,  INPUT_CHANNELS * NUM_INTERSECTIONS + 1> buf;
 
                             boost::system::error_code error;
                             boost::asio::read(socket, boost::asio::buffer(buf), error);
@@ -226,16 +226,16 @@ void DistributedServerNetwork::listen(int portnum) {
                                 break;
                             }
                                 
-                            std::vector<bool> input_data(INPUT_CHANNELS * BOARD_SQUARES);
+                            std::vector<bool> input_data(INPUT_CHANNELS * NUM_INTERSECTIONS);
                             std::copy(begin(buf), end(buf)-1, begin(input_data));
-                            int symmetry = buf[INPUT_CHANNELS * BOARD_SQUARES];
+                            int symmetry = buf[INPUT_CHANNELS * NUM_INTERSECTIONS];
                             
                             auto result = Network::get_output_internal(input_data, symmetry);
 
-                            std::array<float, BOARD_SQUARES+2> obuf;
+                            std::array<float, NUM_INTERSECTIONS+2> obuf;
                             std::copy(begin(result.policy), end(result.policy), begin(obuf));
-                            obuf[BOARD_SQUARES] = result.policy_pass;
-                            obuf[BOARD_SQUARES+1] = result.winrate;
+                            obuf[NUM_INTERSECTIONS] = result.policy_pass;
+                            obuf[NUM_INTERSECTIONS+1] = result.winrate;
                             boost::asio::write(socket, boost::asio::buffer(obuf), error);
                             if (error == boost::asio::error::eof)
                                 break; // Connection closed cleanly by peer.

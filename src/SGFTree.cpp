@@ -39,7 +39,7 @@ using namespace Utils;
 
 const int SGFTree::EOT;
 
-void SGFTree::init_state(void) {
+void SGFTree::init_state() {
     m_initialized = true;
     // Initialize with defaults.
     // The SGF might be missing boardsize or komi
@@ -47,7 +47,7 @@ void SGFTree::init_state(void) {
     m_state.init_game(19, 7.5f);
 }
 
-KoState * SGFTree::get_state(void) {
+KoState * SGFTree::get_state() {
     assert(m_initialized);
     return &m_state;
 }
@@ -77,7 +77,7 @@ GameState SGFTree::follow_mainline_state(unsigned int movenum) {
             if (colored_move.first != FastBoard::INVAL) {
                 if (colored_move.second != FastBoard::PASS
                     && colored_move.second != FastBoard::EMPTY
-                    && result.board.get_square(colored_move.second)
+                    && result.board.get_state(colored_move.second)
                        != FastBoard::EMPTY) {
                     // Fail loading
                     return result;
@@ -114,7 +114,7 @@ void SGFTree::load_from_file(const std::string& filename, int index) {
     load_from_string(gamebuff);
 }
 
-void SGFTree::populate_states(void) {
+void SGFTree::populate_states() {
     PropertyMap::iterator it;
     auto valid_size = false;
     auto has_handicap = false;
@@ -261,16 +261,16 @@ void SGFTree::copy_state(const SGFTree& tree) {
 
 void SGFTree::apply_move(int color, int move) {
     if (move != FastBoard::PASS && move != FastBoard::RESIGN) {
-        auto curr_sq = m_state.board.get_square(move);
-        if (curr_sq == !color || curr_sq == FastBoard::INVAL) {
+        auto vtx_state = m_state.board.get_state(move);
+        if (vtx_state == !color || vtx_state == FastBoard::INVAL) {
             throw std::runtime_error("Illegal move");
         }
-        // Playing on an occupied square is legal in SGF setup,
+        // Playing on an occupied intersection is legal in SGF setup,
         // but we can't really handle it. So just ignore and hope that works.
-        if (curr_sq == color) {
+        if (vtx_state == color) {
             return;
         }
-        assert(curr_sq == FastBoard::EMPTY);
+        assert(vtx_state == FastBoard::EMPTY);
     }
     m_state.play_move(color, move);
 }
@@ -356,7 +356,7 @@ int SGFTree::get_move(int tomove) {
     return SGFTree::EOT;
 }
 
-std::pair<int, int> SGFTree::get_colored_move(void) const {
+std::pair<int, int> SGFTree::get_colored_move() const {
     for (const auto& prop : m_properties) {
         if (prop.first == "B") {
             return std::make_pair(FastBoard::BLACK,
@@ -369,7 +369,7 @@ std::pair<int, int> SGFTree::get_colored_move(void) const {
     return std::make_pair(FastBoard::INVAL, SGFTree::EOT);
 }
 
-FastBoard::square_t SGFTree::get_winner() const {
+FastBoard::vertex_t SGFTree::get_winner() const {
     return m_winner;
 }
 
@@ -443,9 +443,9 @@ std::string SGFTree::state_to_string(GameState& pstate, int compcolor) {
     for (int i = 0; i < size; i++) {
         for (int j = 0; j < size; j++) {
             int vertex = state->board.get_vertex(i, j);
-            int square = state->board.get_square(vertex);
+            int vtx_state = state->board.get_state(vertex);
 
-            if (square == FastBoard::BLACK) {
+            if (vtx_state == FastBoard::BLACK) {
                 handicap++;
                 handicapstr.append("[" + state->board.move_to_text_sgf(vertex) + "]");
             }

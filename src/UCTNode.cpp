@@ -93,7 +93,7 @@ bool UCTNode::create_children(Network & network,
     std::vector<Network::PolicyVertexPair> nodelist;
 
     auto legal_sum = 0.0f;
-    for (auto i = 0; i < BOARD_SQUARES; i++) {
+    for (auto i = 0; i < NUM_INTERSECTIONS; i++) {
         const auto x = i % BOARD_SIZE;
         const auto y = i / BOARD_SIZE;
         const auto vertex = state.board.get_vertex(x, y);
@@ -276,7 +276,11 @@ UCTNode* UCTNode::uct_select_child(int color, bool is_root) {
         }
 
         auto winrate = fpu_eval;
-        if (child.get_visits() > 0) {
+        if (child.is_inflated() && child->m_is_expanding) {
+            // Someone else is expanding this node, never select it
+            // if we can avoid so, because we'd block on it.
+            winrate = -1.0f - fpu_reduction;
+        } else if (child.get_visits() > 0) {
             winrate = child.get_eval(color);
         }
         auto psa = child.get_policy();

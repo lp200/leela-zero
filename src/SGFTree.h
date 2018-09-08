@@ -46,16 +46,16 @@ public:
     SGFTree * add_child();
     SGFTree * get_child(size_t count);
     int get_move(int tomove);
-    std::pair<int, int> get_colored_move(void) const;
+    std::pair<int, int> get_colored_move() const;
     bool is_initialized() const {
         return m_initialized;
     }
-    FastBoard::square_t get_winner() const;
+    FastBoard::vertex_t get_winner() const;
 
     static std::string state_to_string(GameState& state, int compcolor);
 
 private:
-    void populate_states(void);
+    void populate_states();
     void apply_move(int color, int move);
     void apply_move(int move);
     void copy_state(const SGFTree& state);
@@ -65,7 +65,7 @@ private:
 
     bool m_initialized{false};
     KoState m_state;
-    FastBoard::square_t m_winner{FastBoard::INVAL};
+    FastBoard::vertex_t m_winner{FastBoard::INVAL};
     std::vector<SGFTree> m_children;
     PropertyMap m_properties;
 };
