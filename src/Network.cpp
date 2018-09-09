@@ -278,9 +278,8 @@ std::pair<int, int> Network::load_v1_network(std::istream& wtfile) {
     return {channels, static_cast<int>(residual_blocks)};
 }
 
-
-std::pair<int, int> Network::load_network_file(const std::string& filename) {
-    auto compute_hash = [] (std::uint64_t hash, const char * buf, std::size_t sz) -> std::uint64_t {
+std::uint64_t Network::compute_hash(const std::string& filename) {
+    auto __compute_hash = [](std::uint64_t hash, const char * buf, std::size_t sz) {
         for(auto i = std::size_t{0}; i < sz; i++) {
             hash = (hash >> 1) | (hash << 63);
             hash = hash ^ buf[i];
@@ -293,8 +292,7 @@ std::pair<int, int> Network::load_network_file(const std::string& filename) {
     // or just read directly as needed.
     auto gzhandle = gzopen(filename.c_str(), "rb");
     if (gzhandle == nullptr) {
-        myprintf("Could not open weights file: %s\n", filename.c_str());
-        return {0, 0};
+        throw std::runtime_error("Cannot find file");
     }
     // Stream the gz file in to a memory buffer stream.
     auto buffer = std::stringstream{};
@@ -306,16 +304,42 @@ std::pair<int, int> Network::load_network_file(const std::string& filename) {
         auto bytesRead = gzread(gzhandle, chunkBuffer.data(), chunkBufferSize);
         if (bytesRead == 0) break;
         if (bytesRead < 0) {
+            gzclose(gzhandle);
+            throw std::runtime_error("Cannot decompress file file");
+        }
+        assert(bytesRead <= chunkBufferSize);
+        buffer.write(chunkBuffer.data(), bytesRead);
+        hash = __compute_hash(hash, chunkBuffer.data(), bytesRead);
+    }
+    gzclose(gzhandle);
+    return hash;
+}
+
+std::pair<int, int> Network::load_network_file(const std::string& filename) {
+    // gzopen supports both gz and non-gz files, will decompress
+    // or just read directly as needed.
+    auto gzhandle = gzopen(filename.c_str(), "rb");
+    if (gzhandle == nullptr) {
+        myprintf("Could not open weights file: %s\n", filename.c_str());
+        return {0, 0};
+    }
+    // Stream the gz file in to a memory buffer stream.
+    auto buffer = std::stringstream{};
+    constexpr auto chunkBufferSize = 64 * 1024;
+    std::vector<char> chunkBuffer(chunkBufferSize);
+
+    while (true) {
+        auto bytesRead = gzread(gzhandle, chunkBuffer.data(), chunkBufferSize);
+        if (bytesRead == 0) break;
+        if (bytesRead < 0) {
             myprintf("Failed to decompress or read: %s\n", filename.c_str());
             gzclose(gzhandle);
             return {0, 0};
         }
         assert(bytesRead <= chunkBufferSize);
         buffer.write(chunkBuffer.data(), bytesRead);
-        hash = compute_hash(hash, chunkBuffer.data(), bytesRead);
     }
     gzclose(gzhandle);
-    m_nethash = hash;
 
     // Read format version
     auto line = std::string{};
@@ -924,6 +948,3 @@ std::pair<int, int> Network::get_symmetry(const std::pair<int, int>& vertex,
     return {x, y};
 }
 
-std::uint64_t Network::get_net_hash() {
-    return m_nethash;
-}
