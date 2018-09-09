@@ -53,26 +53,26 @@ std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::v
     }
     return output_data_f;
 }
-void DistributedClientNetwork::initialize(int playouts, const std::vector<std::string> & serverlist) {
+void DistributedClientNetwork::initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash) {
     m_serverlist = serverlist;
     Network::initialize(playouts, "");
 
     // if this didn't create enough threads, the background thread will retry creating more and more
     // if it never creates enough threads, local capability (be it CPU or GPU) will be used
-    init_servers(serverlist);
+    init_servers(serverlist, hash);
 
     // create a background thread which tries to create new connectins if some are dead.
     // thread stays active forever, hence if somebody wants to have capability of destroying
     // hets in the middle of a run, this thread should also be safely killed...
     std::thread t(
-        [this]() {
+        [this, hash]() {
             while (true) {
                 std::this_thread::sleep_for(
                     std::chrono::seconds(1)
                 );
                 if (m_active_socket_count.load() < static_cast<size_t>(cfg_num_threads)) {
                     LOCK(m_socket_mutex, lock);
-                    init_servers(m_serverlist);
+                    init_servers(m_serverlist, hash);
                 }
             }
         }
@@ -80,7 +80,7 @@ void DistributedClientNetwork::initialize(int playouts, const std::vector<std::s
     t.detach();
 }
 
-void DistributedClientNetwork::init_servers(const std::vector<std::string> & serverlist) {
+void DistributedClientNetwork::init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash) {
 
     const auto num_threads = (cfg_num_threads - m_sockets.size() + serverlist.size() - 1) / serverlist.size();
     for (auto x : serverlist) {
@@ -116,7 +116,7 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
             // try a dummy call
             try {
                 boost::asio::connect(socket, endpoints);
-                std::array<std::uint64_t,1> my_hash {get_net_hash()};
+                std::array<std::uint64_t,1> my_hash {hash};
                 std::array<std::uint64_t,1> remote_hash {0};
 
                 boost::system::error_code error;
@@ -193,7 +193,7 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
 }
 
 
-void DistributedServerNetwork::listen(int portnum) {
+void DistributedServerNetwork::listen(int portnum, std::uint64_t hash) {
     try {
         std::atomic<int> num_threads{0};
 
@@ -223,11 +223,11 @@ void DistributedServerNetwork::listen(int portnum) {
 
             std::thread t(
                 std::bind(
-                    [&num_threads, this](tcp::socket & socket) {
+                    [&num_threads, this, hash](tcp::socket & socket) {
 
                         auto remote_endpoint = socket.remote_endpoint().address().to_string();
 
-                        std::array<std::uint64_t, 1> my_hash{get_net_hash()};
+                        std::array<std::uint64_t, 1> my_hash{hash};
                         std::array<std::uint64_t, 1> remote_hash {0};
                         boost::system::error_code error;
                         

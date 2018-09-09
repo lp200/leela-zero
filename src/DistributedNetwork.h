@@ -46,8 +46,8 @@ private:
                                               const int symmetry, boost::asio::ip::tcp::socket & socket);
 
 public:
-    void initialize(int playouts, const std::vector<std::string> & serverlist);
-    void init_servers(const std::vector<std::string> & serverlist);
+    void initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash);
+    void init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash);
 
 protected:
     virtual Netresult get_output_internal(const std::vector<bool> & input_data,
@@ -60,7 +60,7 @@ class DistributedServerNetwork : public Network
 private:
     boost::asio::io_service m_io_service;
 public:
-    void listen(int portnum);
+    void listen(int portnum, std::uint64_t hash);
 };
 
 #endif

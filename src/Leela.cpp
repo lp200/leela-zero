@@ -407,14 +407,14 @@ static void initialize_network() {
         auto n = new DistributedServerNetwork(); 
         network.reset(n);
         network->initialize(playouts, cfg_weightsfile);
-        n->listen(cfg_serverport);
+        n->listen(cfg_serverport, Network::compute_hash(cfg_weightsfile));
         exit(0);
     } else if (cfg_serverlist.empty()) {
         network.reset(new Network());
         network->initialize(playouts, cfg_weightsfile);
     } else {
         auto n = new DistributedClientNetwork(); 
-        n->initialize(playouts, cfg_serverlist);
+        n->initialize(playouts, cfg_serverlist, Network::compute_hash(cfg_weightsfile));
         network.reset(n);
         network->initialize(playouts, cfg_weightsfile);
     }
