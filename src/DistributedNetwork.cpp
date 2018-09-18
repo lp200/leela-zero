@@ -28,7 +28,7 @@ template <typename... T> static void netprintf(const char * fmt, T... params) {
         Utils::myprintf(fmt, params...);
     }
 }
-std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::vector<bool> & input_data,
+std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::vector<float> & input_data,
                                           const int symmetry, boost::asio::ip::tcp::socket & socket) {
 
     std::vector<char> input_data_ch(input_data.size() + 1); // input_data (18*361) + symmetry
@@ -53,6 +53,7 @@ std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::v
     }
     return output_data_f;
 }
+
 void DistributedClientNetwork::initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash) {
     m_serverlist = serverlist;
     Network::initialize(playouts, "");
@@ -91,7 +92,7 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
             printf("(got %s\n", x.c_str());
             throw std::runtime_error("Malformed --nn-client argument ");
         }
-    
+
         auto addr = x2[0];
         auto port = x2[1];
 
@@ -123,7 +124,7 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
                 boost::asio::write(socket, boost::asio::buffer(my_hash), error);
                 if (error)
                     throw boost::system::system_error(error); // Some other error.
-        
+
                 boost::asio::read(socket, boost::asio::buffer(remote_hash), error);
                 if (error)
                     throw boost::system::system_error(error); // Some other error.
@@ -154,7 +155,7 @@ void DistributedClientNetwork::initialize(int playouts, const std::string & weig
 }
 
 Network::Netresult DistributedClientNetwork::get_output_internal(
-                                      const std::vector<bool> & input_data,
+                                      const std::vector<float> & input_data,
                                       const int symmetry, bool selfcheck) {
     if (selfcheck) {
         assert(m_local_initialized);
@@ -175,7 +176,6 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
         }
     }
 
-    // XXX : moving a closed socket will segfault.  Think what we should do?
     auto socket = std::move(m_sockets.front());
     m_sockets.pop_front();
     lock.unlock();
@@ -211,7 +211,11 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
 }
 
 
-void DistributedServerNetwork::listen(int portnum, std::uint64_t hash) {
+NetServer::NetServer(Network & net) : m_net(net)
+{
+}
+
+void NetServer::listen(int portnum, std::uint64_t hash) {
     try {
         std::atomic<int> num_threads{0};
 
@@ -248,11 +252,11 @@ void DistributedServerNetwork::listen(int portnum, std::uint64_t hash) {
                         std::array<std::uint64_t, 1> my_hash{hash};
                         std::array<std::uint64_t, 1> remote_hash {0};
                         boost::system::error_code error;
-                        
+
                         boost::asio::read(socket, boost::asio::buffer(remote_hash), error);
                         if (error)
                             throw boost::system::system_error(error); // Some other error.
-                
+
                         boost::asio::write(socket, boost::asio::buffer(my_hash), error);
                         if (error)
                             throw boost::system::system_error(error); // Some other error.
@@ -271,12 +275,12 @@ void DistributedServerNetwork::listen(int portnum, std::uint64_t hash) {
                                 );
                                 break;
                             }
-                                
-                            std::vector<bool> input_data(INPUT_CHANNELS * NUM_INTERSECTIONS);
+
+                            std::vector<float> input_data(INPUT_CHANNELS * NUM_INTERSECTIONS);
                             std::copy(begin(buf), end(buf)-1, begin(input_data));
                             int symmetry = buf[INPUT_CHANNELS * NUM_INTERSECTIONS];
-                            
-                            auto result = Network::get_output_internal(input_data, symmetry);
+
+                            auto result = m_net.get_output_internal(input_data, symmetry);
 
                             std::array<float, NUM_INTERSECTIONS+2> obuf;
                             std::copy(begin(result.policy), end(result.policy), begin(obuf));

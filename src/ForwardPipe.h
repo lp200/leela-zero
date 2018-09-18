@@ -45,7 +45,7 @@ public:
     virtual ~ForwardPipe() = default;
 
     virtual void initialize(const int channels) = 0;
-    virtual void forward(const std::vector<bool>& input,
+    virtual void forward(const std::vector<float>& input,
                          std::vector<float>& output_pol,
                          std::vector<float>& output_val) = 0;
     virtual void push_weights(unsigned int filter_size,

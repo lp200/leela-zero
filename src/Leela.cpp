@@ -409,17 +409,14 @@ static void parse_commandline(int argc, char *argv[]) {
 static void initialize_network() {
     auto playouts = std::min(cfg_max_playouts, cfg_max_visits);
     auto network = std::unique_ptr<Network>();
-    if (cfg_serverport != 0) {
-        auto n = new DistributedServerNetwork(); 
-        network.reset(n);
-        network->initialize(playouts, cfg_weightsfile);
-        n->listen(cfg_serverport, Network::compute_hash(cfg_weightsfile));
-        exit(0);
-    } else if (cfg_serverlist.empty()) {
+
+    if (cfg_serverlist.empty()) {
+        // local net mode
         network.reset(new Network());
         network->initialize(playouts, cfg_weightsfile);
     } else {
-        auto n = new DistributedClientNetwork(); 
+        // distributed remote net mode
+        auto n = new DistributedClientNetwork();
         network.reset(n);
 
         if (!cfg_nn_no_local) {
@@ -428,11 +425,18 @@ static void initialize_network() {
         n->initialize(playouts, cfg_serverlist, Network::compute_hash(cfg_weightsfile));
     }
 
+    // server mode?
+    if (cfg_serverport != 0) {
+        NetServer server(*network);
+        server.listen(cfg_serverport, Network::compute_hash(cfg_weightsfile));
+        exit(0);
+    }
+
     GTP::initialize(std::move(network));
 }
 
 // Setup global objects after command line has been parsed
-static void init_global_objects() {
+void init_global_objects() {
     thread_pool.initialize(cfg_num_threads);
 
     // Use deterministic random numbers for hashing
@@ -482,8 +486,6 @@ int main(int argc, char *argv[]) {
 
     init_global_objects();
 
-    if (cfg_serverport != 0) {
-    }
 
     auto maingame = std::make_unique<GameState>();
 

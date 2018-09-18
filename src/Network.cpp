@@ -770,7 +770,7 @@ Network::Netresult Network::get_output_internal(
 }
 
 Network::Netresult Network::get_output_internal(
-    const std::vector<bool> & input_data, const int symmetry, bool selfcheck) {
+    const std::vector<float> & input_data, const int symmetry, bool selfcheck) {
     assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
     constexpr auto width = BOARD_SIZE;
     constexpr auto height = BOARD_SIZE;
@@ -877,8 +877,8 @@ void Network::show_heatmap(const FastState* const state,
 }
 
 void Network::fill_input_plane_pair(const FullBoard& board,
-                                    std::vector<bool>::iterator black,
-                                    std::vector<bool>::iterator white,
+                                    std::vector<float>::iterator black,
+                                    std::vector<float>::iterator white,
                                     const int symmetry) {
     for (auto idx = 0; idx < NUM_INTERSECTIONS; idx++) {
         const auto sym_idx = symmetry_nn_idx_table[symmetry][idx];
@@ -886,17 +886,17 @@ void Network::fill_input_plane_pair(const FullBoard& board,
         const auto y = sym_idx / BOARD_SIZE;
         const auto color = board.get_state(x, y);
         if (color == FastBoard::BLACK) {
-            black[idx] = true;
+            black[idx] = float(true);
         } else if (color == FastBoard::WHITE) {
-            white[idx] = true;
+            white[idx] = float(true);
         }
     }
 }
 
-std::vector<bool> Network::gather_features(const GameState* const state,
+std::vector<float> Network::gather_features(const GameState* const state,
                                             const int symmetry) {
     assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
-    auto input_data = std::vector<bool>(INPUT_CHANNELS * NUM_INTERSECTIONS);
+    auto input_data = std::vector<float>(INPUT_CHANNELS * NUM_INTERSECTIONS);
 
     const auto to_move = state->get_to_move();
     const auto blacks_move = to_move == FastBoard::BLACK;
@@ -921,7 +921,7 @@ std::vector<bool> Network::gather_features(const GameState* const state,
                               symmetry);
     }
 
-    std::fill(to_move_it, to_move_it + NUM_INTERSECTIONS, true);
+    std::fill(to_move_it, to_move_it + NUM_INTERSECTIONS, float(true));
 
     return input_data;
 }

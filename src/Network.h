@@ -76,8 +76,6 @@ public:
 
     void initialize(int playouts, const std::string & weightsfile);
 
-    static std::vector<bool> gather_features(const GameState* const state,
-                                              const int symmetry);
 
     float benchmark_time(int centiseconds);
     void benchmark(const GameState * const state,
@@ -85,11 +83,13 @@ public:
     static void show_heatmap(const FastState * const state,
                              const Netresult & netres, const bool topmoves);
 
+    static std::vector<float> gather_features(const GameState* const state,
+                                              const int symmetry);
     static std::pair<int, int> get_symmetry(const std::pair<int, int>& vertex,
                                             const int symmetry,
                                             const int board_size = BOARD_SIZE);
 
-    virtual Netresult get_output_internal(const std::vector<bool> & input_data,
+    virtual Netresult get_output_internal(const std::vector<float> & input_data,
                                           const int symmetry, bool selfcheck = false);
 
     static std::uint64_t compute_hash(const std::string & filename);
@@ -97,6 +97,7 @@ public:
     size_t get_estimated_size();
     size_t get_estimated_cache_size();
     void nncache_resize(int max_count);
+
 private:
     std::pair<int, int> load_v1_network(std::istream& wtfile);
     std::pair<int, int> load_network_file(const std::string& filename);
@@ -121,12 +122,11 @@ private:
     static void winograd_sgemm(const std::vector<float>& U,
                                const std::vector<float>& V,
                                std::vector<float>& M, const int C, const int K);
-
     Netresult get_output_internal(const GameState* const state,
                                   const int symmetry, bool selfcheck = false);
     static void fill_input_plane_pair(const FullBoard& board,
-                                      std::vector<bool>::iterator black,
-                                      std::vector<bool>::iterator white,
+                                      std::vector<float>::iterator black,
+                                      std::vector<float>::iterator white,
                                       const int symmetry);
     bool probe_cache(const GameState* const state, Network::Netresult& result);
     std::unique_ptr<ForwardPipe> m_forward;

@@ -39,7 +39,7 @@ class OpenCLScheduler : public ForwardPipe {
     };
 public:
     virtual void initialize(const int channels);
-    virtual void forward(const std::vector<bool>& input,
+    virtual void forward(const std::vector<float>& input,
                          std::vector<float>& output_pol,
                          std::vector<float>& output_val);
     virtual void push_weights(unsigned int filter_size,
