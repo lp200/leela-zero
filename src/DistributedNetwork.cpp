@@ -148,18 +148,31 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
     }
 }
 
+void DistributedClientNetwork::initialize(int playouts, const std::string & weightsfile) {
+    Network::initialize(playouts, weightsfile);
+    m_local_initialized = true;
+}
+
 Network::Netresult DistributedClientNetwork::get_output_internal(
                                       const std::vector<bool> & input_data,
                                       const int symmetry, bool selfcheck) {
     if (selfcheck) {
+        assert(m_local_initialized);
         return Network::get_output_internal(input_data, symmetry, true);
     }
 
     LOCK(m_socket_mutex, lock);
     if (m_sockets.empty()) {
-        // if we don't have enough sockets, use local machine capability as backup
         lock.unlock();
-        return Network::get_output_internal(input_data, symmetry, selfcheck);
+
+        // if we don't have enough sockets, use local machine capability as backup
+        if (m_local_initialized) {
+            return Network::get_output_internal(input_data, symmetry, selfcheck);
+        } else {
+            // no local resource, try again later
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            return get_output_internal(input_data, symmetry, selfcheck);
+        }
     }
 
     // XXX : moving a closed socket will segfault.  Think what we should do?
@@ -176,7 +189,12 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
         // capability as a backup
         assert(m_active_socket_count.load() > 0);
         m_active_socket_count--;
-        return Network::get_output_internal(input_data, symmetry, selfcheck);
+        if (m_local_initialized) {
+            return Network::get_output_internal(input_data, symmetry, selfcheck);
+        } else {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            return get_output_internal(input_data, symmetry, selfcheck);
+        }
     }
 
     {

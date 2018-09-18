@@ -53,6 +53,7 @@ static void license_blurb() {
 
 static std::vector<std::string> cfg_serverlist;
 static int cfg_serverport = 0;
+static bool cfg_nn_no_local = false;
 
 static void parse_commandline(int argc, char *argv[]) {
     namespace po = boost::program_options;
@@ -62,6 +63,8 @@ static void parse_commandline(int argc, char *argv[]) {
         ("nn-server", po::value<int>(), "NN Network server mode")
         ("nn-client", po::value<std::vector<std::string>>(), "NN Network client mode")
         ("nn-client-verbose", "NN Network client mode : verbose message")
+        ("nn-client-nolocal", "NN Network client mode : No fallback.  Program will wait until it connects "
+                              "to a net evaluation server.  Default is to keep a fallback weight compute")
         ("help,h", "Show commandline options.")
         ("gtp,g", "Enable GTP mode.")
         ("threads,t", po::value<int>()->default_value(cfg_num_threads),
@@ -199,6 +202,9 @@ static void parse_commandline(int argc, char *argv[]) {
 
         if (vm.count("nn-client-verbose")) {
             cfg_nn_client_verbose = true;
+        }
+        if (vm.count("nn-client-nolocal")) {
+            cfg_nn_no_local = true;
         }
     }
 
@@ -414,9 +420,12 @@ static void initialize_network() {
         network->initialize(playouts, cfg_weightsfile);
     } else {
         auto n = new DistributedClientNetwork(); 
-        n->initialize(playouts, cfg_serverlist, Network::compute_hash(cfg_weightsfile));
         network.reset(n);
-        network->initialize(playouts, cfg_weightsfile);
+
+        if (!cfg_nn_no_local) {
+            n->initialize(playouts, cfg_weightsfile);
+        }
+        n->initialize(playouts, cfg_serverlist, Network::compute_hash(cfg_weightsfile));
     }
 
     GTP::initialize(std::move(network));

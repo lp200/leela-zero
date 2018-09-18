@@ -41,12 +41,14 @@ private:
     std::atomic<size_t> m_active_socket_count{0};
     SMP::Mutex m_socket_mutex;
     std::vector<std::string> m_serverlist;
+    bool m_local_initialized = false;
 
     std::vector<float> get_output_from_socket(const std::vector<bool> & input_data,
                                               const int symmetry, boost::asio::ip::tcp::socket & socket);
 
 public:
     void initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash);
+    void initialize(int playouts, const std::string & weightsfile);
     void init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash);
 
 protected:

@@ -274,7 +274,7 @@ QString Management::getOptionsString(const QJsonObject &opt, const QString &rnd)
         options.append(" -s " + rnd + " ");
     }
     if(m_servername != "") {
-        options.append(" --nn-client " + m_servername + " ");
+        options.append(" --nn-client " + m_servername + " --nn-client-nolocal ");
     }
     if(m_precision != "") {
         options.append(" --precision " + m_precision + " ");
