@@ -44,7 +44,7 @@ private:
     bool m_local_initialized = false;
 
     std::vector<float> get_output_from_socket(const std::vector<float> & input_data,
-                                              const int symmetry, boost::asio::ip::tcp::socket & socket);
+                                              boost::asio::ip::tcp::socket & socket);
 
 public:
     void initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash);
@@ -52,8 +52,8 @@ public:
     void init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash);
 
 protected:
-    virtual Netresult get_output_internal(const std::vector<float> & input_data,
-                                          const int symmetry, bool selfcheck = false);
+    virtual std::pair<std::vector<float>,float> get_output_internal(const std::vector<float> & input_data,
+                                                                    bool selfcheck = false);
 };
 
 

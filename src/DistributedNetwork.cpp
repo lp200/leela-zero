@@ -29,12 +29,11 @@ template <typename... T> static void netprintf(const char * fmt, T... params) {
     }
 }
 std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::vector<float> & input_data,
-                                          const int symmetry, boost::asio::ip::tcp::socket & socket) {
+                                                                    boost::asio::ip::tcp::socket & socket) {
 
-    std::vector<char> input_data_ch(input_data.size() + 1); // input_data (18*361) + symmetry
+    std::vector<char> input_data_ch(input_data.size()); // input_data (18*361)
     assert(input_data_ch.size() == INPUT_CHANNELS * NUM_INTERSECTIONS + 1);
     std::copy(begin(input_data), end(input_data), begin(input_data_ch));
-    input_data_ch[input_data_ch.size()-1] = symmetry;
 
     std::vector<float> output_data_f(NUM_INTERSECTIONS + 2);
     try {
@@ -154,12 +153,12 @@ void DistributedClientNetwork::initialize(int playouts, const std::string & weig
     m_local_initialized = true;
 }
 
-Network::Netresult DistributedClientNetwork::get_output_internal(
+std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_internal(
                                       const std::vector<float> & input_data,
-                                      const int symmetry, bool selfcheck) {
+                                      bool selfcheck) {
     if (selfcheck) {
         assert(m_local_initialized);
-        return Network::get_output_internal(input_data, symmetry, true);
+        return Network::get_output_internal(input_data, true);
     }
 
     LOCK(m_socket_mutex, lock);
@@ -168,11 +167,11 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
 
         // if we don't have enough sockets, use local machine capability as backup
         if (m_local_initialized) {
-            return Network::get_output_internal(input_data, symmetry, selfcheck);
+            return Network::get_output_internal(input_data, selfcheck);
         } else {
             // no local resource, try again later
             std::this_thread::sleep_for(std::chrono::seconds(1));
-            return get_output_internal(input_data, symmetry, selfcheck);
+            return get_output_internal(input_data, selfcheck);
         }
     }
 
@@ -183,17 +182,17 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
     std::vector<float> output_data_f;
 
     try {
-        output_data_f = get_output_from_socket(input_data, symmetry, socket);
+        output_data_f = get_output_from_socket(input_data, socket);
     } catch (...) {
         // socket is dead for some reason.  Throw it away and use local machine
         // capability as a backup
         assert(m_active_socket_count.load() > 0);
         m_active_socket_count--;
         if (m_local_initialized) {
-            return Network::get_output_internal(input_data, symmetry, selfcheck);
+            return Network::get_output_internal(input_data, selfcheck);
         } else {
             std::this_thread::sleep_for(std::chrono::seconds(1));
-            return get_output_internal(input_data, symmetry, selfcheck);
+            return get_output_internal(input_data, selfcheck);
         }
     }
 
@@ -202,12 +201,13 @@ Network::Netresult DistributedClientNetwork::get_output_internal(
         m_sockets.push_back(std::move(socket));
     }
 
-    Network::Netresult ret;
-    std::copy(begin(output_data_f), begin(output_data_f) + NUM_INTERSECTIONS, begin(ret.policy));
-    ret.policy_pass = output_data_f[NUM_INTERSECTIONS];
-    ret.winrate = output_data_f[NUM_INTERSECTIONS + 1];
+    std::vector<float> p(NUM_INTERSECTIONS + 1);
+    float v;
 
-    return ret;
+    std::copy(begin(output_data_f), begin(output_data_f) + NUM_INTERSECTIONS, begin(p));
+    v = output_data_f[NUM_INTERSECTIONS + 1];
+
+    return {p, v};
 }
 
 
@@ -263,7 +263,7 @@ void NetServer::listen(int portnum, std::uint64_t hash) {
 
 
                         while (true) {
-                            std::array<char,  INPUT_CHANNELS * NUM_INTERSECTIONS + 1> buf;
+                            std::array<char,  INPUT_CHANNELS * NUM_INTERSECTIONS> buf;
 
                             boost::system::error_code error;
                             boost::asio::read(socket, boost::asio::buffer(buf), error);
@@ -277,15 +277,13 @@ void NetServer::listen(int portnum, std::uint64_t hash) {
                             }
 
                             std::vector<float> input_data(INPUT_CHANNELS * NUM_INTERSECTIONS);
-                            std::copy(begin(buf), end(buf)-1, begin(input_data));
-                            int symmetry = buf[INPUT_CHANNELS * NUM_INTERSECTIONS];
+                            std::copy(begin(buf), end(buf), begin(input_data));
 
-                            auto result = m_net.get_output_internal(input_data, symmetry);
+                            auto result = m_net.get_output_internal(input_data, false);
 
                             std::array<float, NUM_INTERSECTIONS+2> obuf;
-                            std::copy(begin(result.policy), end(result.policy), begin(obuf));
-                            obuf[NUM_INTERSECTIONS] = result.policy_pass;
-                            obuf[NUM_INTERSECTIONS+1] = result.winrate;
+                            std::copy(begin(result.first), end(result.first), begin(obuf));
+                            obuf[NUM_INTERSECTIONS+1] = result.second;
                             boost::asio::write(socket, boost::asio::buffer(obuf), error);
                             if (error == boost::asio::error::eof)
                                 break; // Connection closed cleanly by peer.

@@ -765,13 +765,26 @@ Network::Netresult Network::get_output(
 
 Network::Netresult Network::get_output_internal(
     const GameState* const state, const int symmetry, bool selfcheck) {
+    assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
     const auto input_data = gather_features(state, symmetry);
-    return get_output_internal(input_data, symmetry, selfcheck);
+
+    auto ret = get_output_internal(input_data, selfcheck);
+
+    Netresult result;
+
+    for (auto idx = size_t{0}; idx < NUM_INTERSECTIONS; idx++) {
+        const auto sym_idx = symmetry_nn_idx_table[symmetry][idx];
+        result.policy[sym_idx] = ret.first[idx];
+    }
+
+    result.policy_pass = ret.first[NUM_INTERSECTIONS];
+    result.winrate = ret.second;
+
+    return result;
 }
 
-Network::Netresult Network::get_output_internal(
-    const std::vector<float> & input_data, const int symmetry, bool selfcheck) {
-    assert(symmetry >= 0 && symmetry < NUM_SYMMETRIES);
+std::pair<std::vector<float>,float> Network::get_output_internal(const std::vector<float> & input_data, bool selfcheck)
+{
     constexpr auto width = BOARD_SIZE;
     constexpr auto height = BOARD_SIZE;
 
@@ -808,17 +821,8 @@ Network::Netresult Network::get_output_internal(
     // Map TanH output range [-1..1] to [0..1] range
     const auto winrate = (1.0f + std::tanh(winrate_out[0])) / 2.0f;
 
-    Netresult result;
+    return {outputs, winrate};
 
-    for (auto idx = size_t{0}; idx < NUM_INTERSECTIONS; idx++) {
-        const auto sym_idx = symmetry_nn_idx_table[symmetry][idx];
-        result.policy[sym_idx] = outputs[idx];
-    }
-
-    result.policy_pass = outputs[NUM_INTERSECTIONS];
-    result.winrate = winrate;
-
-    return result;
 }
 
 void Network::show_heatmap(const FastState* const state,

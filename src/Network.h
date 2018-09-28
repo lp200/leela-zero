@@ -89,8 +89,8 @@ public:
                                             const int symmetry,
                                             const int board_size = BOARD_SIZE);
 
-    virtual Netresult get_output_internal(const std::vector<float> & input_data,
-                                          const int symmetry, bool selfcheck = false);
+    virtual std::pair<std::vector<float>,float>
+                get_output_internal(const std::vector<float> & input_data, bool selfcheck);
 
     static std::uint64_t compute_hash(const std::string & filename);
 
