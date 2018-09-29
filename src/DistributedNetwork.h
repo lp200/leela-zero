@@ -42,6 +42,7 @@ private:
     SMP::Mutex m_socket_mutex;
     std::vector<std::string> m_serverlist;
     bool m_local_initialized = false;
+    bool m_socket_initialized = false;
 
     std::vector<float> get_output_from_socket(const std::vector<float> & input_data,
                                               boost::asio::ip::tcp::socket & socket);

@@ -144,13 +144,14 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
 
             netprintf("NN client connected to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
         }
-
     }
+
+    m_socket_initialized = true;
 }
 
 void DistributedClientNetwork::initialize(int playouts, const std::string & weightsfile) {
-    Network::initialize(playouts, weightsfile);
     m_local_initialized = true;
+    Network::initialize(playouts, weightsfile);
 }
 
 std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_internal(
@@ -160,6 +161,12 @@ std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_interna
         assert(m_local_initialized);
         return Network::get_output_internal(input_data, true);
     }
+
+    if (!m_socket_initialized) {
+        assert(m_local_initialized);
+        return Network::get_output_internal(input_data, selfcheck);
+    }
+
 
     LOCK(m_socket_mutex, lock);
     if (m_sockets.empty()) {
