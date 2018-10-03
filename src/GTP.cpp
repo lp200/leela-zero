@@ -31,6 +31,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <boost/algorithm/string.hpp>
 
 #include "FastBoard.h"
 #include "FullBoard.h"
@@ -458,22 +459,43 @@ bool GTP::execute(GameState & game, const std::string& xinput) {
     } else if (command.find("lz-analyze") == 0) {
         std::istringstream cmdstream(command);
         std::string tmp;
-        int interval;
+        auto who = game.board.get_to_move();
 
         cmdstream >> tmp; // eat lz-analyze
-        cmdstream >> interval;
+        cmdstream >> tmp; // eat side to move or interval
         if (!cmdstream.fail()) {
-            cfg_analyze_interval_centis = interval;
-        } else {
-            gtp_fail_printf(id, "syntax not understood");
-            return true;
+            if (tmp == "w" || tmp == "white") {
+                who = FastBoard::WHITE;
+            } else if (tmp == "b" || tmp == "black") {
+                who = FastBoard::BLACK;
+            } else {
+                // Not side to move, must be interval
+                try {
+                    cfg_analyze_interval_centis = std::stoi(tmp);
+                } catch(...) {
+                    gtp_fail_printf(id, "syntax not understood");
+                    return true;
+                }
+            }
+            if (tmp == "w" || tmp == "b" || tmp == "white" || tmp == "black") {
+                // We got a color, so the interval must come now.
+                int interval;
+                cmdstream >> interval;
+                if (!cmdstream.fail()) {
+                    cfg_analyze_interval_centis = interval;
+                } else {
+                    gtp_fail_printf(id, "syntax not understood");
+                    return true;
+                }
+            }
         }
-        // Start multi-line response
+        // Start multi-line response.
         if (id != -1) gtp_printf_raw("=%d\n", id);
         else gtp_printf_raw("=\n");
-        // now start pondering
+        // Now start pondering.
         if (!game.has_resigned()) {
             // Outputs winrate and pvs through gtp
+            game.set_to_move(who);
             search->ponder();
         }
         cfg_analyze_interval_centis = 0;
@@ -811,6 +833,9 @@ bool GTP::execute(GameState & game, const std::string& xinput) {
         cmdstream >> filename;
 
         auto sgf_text = SGFTree::state_to_string(game, 0);
+        // GTP says consecutive newlines terminate the output,
+        // so we must filter those.
+        boost::replace_all(sgf_text, "\n\n", "\n");
 
         if (cmdstream.fail()) {
             gtp_printf(id, "%s\n", sgf_text.c_str());
@@ -947,8 +972,8 @@ size_t GTP::get_base_memory() {
     // At the moment of writing the memory consumption is
     // roughly network size + 85 for one GPU and + 160 for two GPUs.
 #ifdef USE_OPENCL
-    return (size_t)(s_network->get_estimated_size()
-                    + 85 * MiB * cfg_gpus.size());
+    auto gpus = std::max(cfg_gpus.size(), size_t{1});
+    return s_network->get_estimated_size() + 85 * MiB * gpus;
 #else
     return s_network->get_estimated_size();
 #endif
