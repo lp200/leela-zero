@@ -113,26 +113,36 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
         for (auto i=size_t{0}; i<num_threads; i++) {
             tcp::socket socket(m_io_service);
 
-            // try a dummy call
             try {
-                boost::asio::connect(socket, endpoints);
-                std::array<std::uint64_t,1> my_hash {hash};
-                std::array<std::uint64_t,1> remote_hash {0};
 
-                boost::system::error_code error;
-                boost::asio::write(socket, boost::asio::buffer(my_hash), error);
-                if (error)
-                    throw boost::system::system_error(error); // Some other error.
-
-                boost::asio::read(socket, boost::asio::buffer(remote_hash), error);
-                if (error)
-                    throw boost::system::system_error(error); // Some other error.
-
-		if(my_hash[0] != remote_hash[0]) {
-                    netprintf(
-                        "NN client dropped to server %s port %s (hash mismatch, remote=%llx, local=%llx)\n", addr.c_str(), port.c_str(), remote_hash[0], my_hash[0]);
-                    continue;
+                auto connect_task = [this, &addr, &port, &socket, &endpoints, hash] () {
+                    boost::asio::connect(socket, endpoints);
+                    std::array<std::uint64_t,1> my_hash {hash};
+                    std::array<std::uint64_t,1> remote_hash {0};
+    
+                    boost::system::error_code error;
+                    boost::asio::write(socket, boost::asio::buffer(my_hash), error);
+                    if (error)
+                        throw boost::system::system_error(error); // Some other error.
+    
+                    boost::asio::read(socket, boost::asio::buffer(remote_hash), error);
+                    if (error)
+                        throw boost::system::system_error(error); // Some other error.
+    
+                    if(my_hash[0] != remote_hash[0]) {
+                        netprintf(
+                            "NN client dropped to server %s port %s (hash mismatch, remote=%llx, local=%llx)\n",
+                                addr.c_str(), port.c_str(), remote_hash[0], my_hash[0]);
+                        throw std::exception();
+                    }
+                };
+        
+                auto f = std::async(std::launch::async, connect_task);
+                auto res = f.wait_for(std::chrono::milliseconds(500));
+                if (res == std::future_status::timeout) {
+                    throw std::exception();
                 }
+                f.get();
             } catch (...) {
                 // doesn't work. Probably remote side ran out of threads.
                 // drop socket.
@@ -189,7 +199,17 @@ std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_interna
     std::vector<float> output_data_f;
 
     try {
-        output_data_f = get_output_from_socket(input_data, socket);
+        // try socket access as an asynchronous task.  
+        auto f = std::async(
+            std::launch::async, 
+            [this, input_data, &socket]() { return get_output_from_socket(input_data, socket); }
+        );
+
+        auto res = f.wait_for(std::chrono::milliseconds(500));
+        if (res == std::future_status::timeout) {
+            throw std::exception();
+        }
+        output_data_f = f.get();
     } catch (...) {
         // socket is dead for some reason.  Throw it away and use local machine
         // capability as a backup
