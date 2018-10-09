@@ -47,7 +47,7 @@ std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::v
             throw boost::system::system_error(error); // Some other error.
     } catch (std::exception& e)
     {
-        std::cerr << e.what() << std::endl;
+        netprintf("Socket killed by exception : %s\n", e.what());
         throw;
     }
     return output_data_f;
@@ -140,6 +140,10 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
                 auto f = std::async(std::launch::async, connect_task);
                 auto res = f.wait_for(std::chrono::milliseconds(500));
                 if (res == std::future_status::timeout) {
+                    socket.shutdown(tcp::socket::shutdown_send);
+                    socket.shutdown(tcp::socket::shutdown_receive);
+                    socket.close();
+                    f.get();
                     throw std::exception();
                 }
                 f.get();
@@ -207,6 +211,11 @@ std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_interna
 
         auto res = f.wait_for(std::chrono::milliseconds(500));
         if (res == std::future_status::timeout) {
+            // force-close socket
+            socket.shutdown(tcp::socket::shutdown_send);
+            socket.shutdown(tcp::socket::shutdown_receive);
+            socket.close();
+            f.get();
             throw std::exception();
         }
         output_data_f = f.get();
