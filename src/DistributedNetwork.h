@@ -27,6 +27,7 @@
 #include <boost/algorithm/string.hpp>
 #include <algorithm>
 #include <vector>
+#include <thread>
 
 #include "Utils.h"
 #include "SMP.h"
@@ -37,20 +38,42 @@ class DistributedClientNetwork : public Network
 {
 private:
     boost::asio::io_service m_io_service;
-    std::deque<boost::asio::ip::tcp::socket> m_sockets;
     std::atomic<size_t> m_active_socket_count{0};
-    SMP::Mutex m_socket_mutex;
+    std::thread m_fork_thread;
     std::vector<std::string> m_serverlist;
     bool m_local_initialized = false;
     bool m_socket_initialized = false;
 
+    std::atomic<bool> m_running{true};
+
+    class ForwardQueueEntry {
+    public:
+        std::mutex mutex;
+        std::condition_variable cv;
+        const std::vector<float>& in;
+        std::pair<std::vector<float>,float> & out;
+        bool out_ready = false;
+        boost::asio::ip::tcp::socket * socket = nullptr;
+        ForwardQueueEntry(const std::vector<float>& input,
+                        std::pair<std::vector<float>,float>& output) 
+            : in(input), out(output)
+        {}
+    };
+
+    std::mutex m_forward_mutex;
+    std::condition_variable m_cv;
+    std::list<std::shared_ptr<ForwardQueueEntry>> m_forward_queue;
+
     std::vector<float> get_output_from_socket(const std::vector<float> & input_data,
                                               boost::asio::ip::tcp::socket & socket);
 
+    void worker_thread(boost::asio::ip::tcp::socket && socket);
 public:
     void initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash);
     void initialize(int playouts, const std::string & weightsfile);
     void init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash);
+
+    virtual ~DistributedClientNetwork();
 
 protected:
     virtual std::pair<std::vector<float>,float> get_output_internal(const std::vector<float> & input_data,

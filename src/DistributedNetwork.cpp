@@ -32,7 +32,7 @@ std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::v
                                                                     boost::asio::ip::tcp::socket & socket) {
 
     std::vector<char> input_data_ch(input_data.size()); // input_data (18*361)
-    assert(input_data_ch.size() == INPUT_CHANNELS * NUM_INTERSECTIONS + 1);
+    assert(input_data_ch.size() == INPUT_CHANNELS * NUM_INTERSECTIONS);
     std::copy(begin(input_data), end(input_data), begin(input_data_ch));
 
     std::vector<float> output_data_f(NUM_INTERSECTIONS + 2);
@@ -66,23 +66,21 @@ void DistributedClientNetwork::initialize(int playouts, const std::vector<std::s
     // hets in the middle of a run, this thread should also be safely killed...
     std::thread t(
         [this, hash]() {
-            while (true) {
+            while (m_running.load()) {
                 std::this_thread::sleep_for(
                     std::chrono::seconds(1)
                 );
                 if (m_active_socket_count.load() < static_cast<size_t>(cfg_num_threads)) {
-                    LOCK(m_socket_mutex, lock);
                     init_servers(m_serverlist, hash);
                 }
             }
         }
     );
-    t.detach();
+    m_fork_thread = std::move(t);
 }
 
 void DistributedClientNetwork::init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash) {
-
-    const auto num_threads = (cfg_num_threads - m_sockets.size() + serverlist.size() - 1) / serverlist.size();
+    const auto num_threads = (cfg_num_threads - m_active_socket_count.load() + serverlist.size() - 1) / serverlist.size();
     for (auto x : serverlist) {
         std::vector<std::string> x2;
         boost::split(x2, x, boost::is_any_of(":"));
@@ -111,21 +109,20 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
 
 
         for (auto i=size_t{0}; i<num_threads; i++) {
-            tcp::socket socket(m_io_service);
+            auto socket = std::make_shared<tcp::socket>(m_io_service);
 
             try {
-
                 auto connect_task = [this, &addr, &port, &socket, &endpoints, hash] () {
-                    boost::asio::connect(socket, endpoints);
+                    boost::asio::connect(*socket, endpoints);
                     std::array<std::uint64_t,1> my_hash {hash};
                     std::array<std::uint64_t,1> remote_hash {0};
     
                     boost::system::error_code error;
-                    boost::asio::write(socket, boost::asio::buffer(my_hash), error);
+                    boost::asio::write(*socket, boost::asio::buffer(my_hash), error);
                     if (error)
                         throw boost::system::system_error(error); // Some other error.
     
-                    boost::asio::read(socket, boost::asio::buffer(remote_hash), error);
+                    boost::asio::read(*socket, boost::asio::buffer(remote_hash), error);
                     if (error)
                         throw boost::system::system_error(error); // Some other error.
     
@@ -140,9 +137,9 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
                 auto f = std::async(std::launch::async, connect_task);
                 auto res = f.wait_for(std::chrono::milliseconds(500));
                 if (res == std::future_status::timeout) {
-                    socket.shutdown(tcp::socket::shutdown_send);
-                    socket.shutdown(tcp::socket::shutdown_receive);
-                    socket.close();
+                    socket->shutdown(tcp::socket::shutdown_send);
+                    socket->shutdown(tcp::socket::shutdown_receive);
+                    socket->close();
                     f.get();
                     throw std::exception();
                 }
@@ -153,8 +150,11 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
                 netprintf("NN client dropped to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
                 continue;
             }
-            m_sockets.emplace_back(std::move(socket));
+
             m_active_socket_count++;
+            auto w = std::bind([this](std::shared_ptr<tcp::socket> socket) { worker_thread(std::move(*socket)); }, socket );
+            std::thread t(w);
+            t.detach();
 
             netprintf("NN client connected to server %s port %s (thread %d)\n", addr.c_str(), port.c_str(), i);
         }
@@ -166,6 +166,14 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
 void DistributedClientNetwork::initialize(int playouts, const std::string & weightsfile) {
     m_local_initialized = true;
     Network::initialize(playouts, weightsfile);
+}
+
+DistributedClientNetwork::~DistributedClientNetwork() {
+    m_running = false;
+    m_fork_thread.join();
+    
+    m_cv.notify_all();
+    while (m_active_socket_count.load() > 0) {}
 }
 
 std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_internal(
@@ -181,69 +189,73 @@ std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_interna
         return Network::get_output_internal(input_data, selfcheck);
     }
 
+    std::pair<std::vector<float>,float> ret;
 
-    LOCK(m_socket_mutex, lock);
-    if (m_sockets.empty()) {
-        lock.unlock();
-
-        // if we don't have enough sockets, use local machine capability as backup
-        if (m_local_initialized) {
-            return Network::get_output_internal(input_data, selfcheck);
-        } else {
-            // no local resource, try again later
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            return get_output_internal(input_data, selfcheck);
-        }
-    }
-
-    auto socket = std::move(m_sockets.front());
-    m_sockets.pop_front();
-    lock.unlock();
-
-    std::vector<float> output_data_f;
-
-    try {
-        // try socket access as an asynchronous task.  
-        auto f = std::async(
-            std::launch::async, 
-            [this, input_data, &socket]() { return get_output_from_socket(input_data, socket); }
-        );
-
-        auto res = f.wait_for(std::chrono::milliseconds(500));
-        if (res == std::future_status::timeout) {
-            // force-close socket
-            socket.shutdown(tcp::socket::shutdown_send);
-            socket.shutdown(tcp::socket::shutdown_receive);
-            socket.close();
-            f.get();
-            throw std::exception();
-        }
-        output_data_f = f.get();
-    } catch (...) {
-        // socket is dead for some reason.  Throw it away and use local machine
-        // capability as a backup
-        assert(m_active_socket_count.load() > 0);
-        m_active_socket_count--;
-        if (m_local_initialized) {
-            return Network::get_output_internal(input_data, selfcheck);
-        } else {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            return get_output_internal(input_data, selfcheck);
-        }
-    }
-
+    auto entry = std::make_shared<ForwardQueueEntry>(input_data, ret);
+    std::unique_lock<std::mutex> lk(entry->mutex);
     {
-        LOCK(m_socket_mutex, lock2);
-        m_sockets.push_back(std::move(socket));
+        std::unique_lock<std::mutex> lk(m_forward_mutex);
+        m_forward_queue.push_back(entry);
     }
+    m_cv.notify_one();
+    entry->cv.wait_for(lk, std::chrono::milliseconds(500));
 
-    std::vector<float> p(NUM_INTERSECTIONS + 1);
-    float v;
+    if (!entry->out_ready) {
+        if (entry->socket != nullptr) {
+            // force-close socket
+            try {
+                entry->socket->shutdown(tcp::socket::shutdown_send);
+                entry->socket->shutdown(tcp::socket::shutdown_receive);
+                entry->socket->close();
+            } catch (...) {}
+        } else {
+            // no socket picked this entry yet - clean up, don't compute
+            entry->out_ready = true; // this signals the socket that this should be dropped
+        }
 
-    std::copy(begin(output_data_f), begin(output_data_f) + NUM_INTERSECTIONS, begin(p));
-    v = output_data_f[NUM_INTERSECTIONS + 1];
+        lk.unlock();
+        return get_output_internal(input_data, selfcheck);
+    }
+    return ret;
+}
 
-    return {p, v};
+
+void DistributedClientNetwork::worker_thread(boost::asio::ip::tcp::socket && socket) {
+    while (true) {
+        std::unique_lock<std::mutex> lk(m_forward_mutex);
+        if (m_forward_queue.empty()) {
+            m_cv.wait(lk, [this]() { return !m_forward_queue.empty(); });
+        }
+     
+        auto entry = m_forward_queue.front();
+        m_forward_queue.pop_front();
+        lk.unlock();
+
+    	std::unique_lock<std::mutex> lk2(entry->mutex);
+        if (entry->out_ready) {
+            continue;
+        }
+        entry->socket = &socket;
+        lk2.unlock();
+
+        try {
+            auto output_data_f = get_output_from_socket(entry->in, socket);
+
+            lk2.lock();
+            entry->out.first = std::vector<float>(NUM_INTERSECTIONS + 1);
+            std::copy(begin(output_data_f), begin(output_data_f) + NUM_INTERSECTIONS, begin(entry->out.first));
+            entry->out.second = output_data_f[NUM_INTERSECTIONS + 1];
+            entry->out_ready = true;
+            lk2.unlock();
+            entry->cv.notify_one();
+        } catch (...) {
+            lk2.lock();
+            entry->socket = nullptr;
+            lk2.unlock();
+            m_active_socket_count--;
+            return;
+        }
+    }
 }
 
 
