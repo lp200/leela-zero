@@ -39,6 +39,7 @@ class DistributedClientNetwork : public Network
 private:
     boost::asio::io_service m_io_service;
     std::atomic<size_t> m_active_socket_count{0};
+    std::atomic<size_t> m_active_eval_count{0};
     std::thread m_fork_thread;
     std::vector<std::string> m_serverlist;
     bool m_local_initialized = false;
@@ -60,18 +61,26 @@ private:
         {}
     };
 
-    std::mutex m_forward_mutex;
-    std::condition_variable m_cv;
-    std::list<std::shared_ptr<ForwardQueueEntry>> m_forward_queue;
+    class Server {
+    public:
+        std::string m_server_name;
+        std::mutex m_forward_mutex;
+        std::condition_variable m_cv;
+        std::list<std::shared_ptr<ForwardQueueEntry>> m_forward_queue;
+        std::atomic<int> m_active_socket_count{0};
+        std::atomic<int> m_active_eval_count{0};
+    };
+    std::vector<Server> m_servers;
+    std::atomic<int> m_server_ptr;
 
     std::vector<float> get_output_from_socket(const std::vector<float> & input_data,
                                               boost::asio::ip::tcp::socket & socket);
 
-    void worker_thread(boost::asio::ip::tcp::socket && socket);
+    void worker_thread(boost::asio::ip::tcp::socket && socket, Server & server);
 public:
     void initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash);
     void initialize(int playouts, const std::string & weightsfile);
-    void init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash);
+    void init_servers(std::uint64_t hash);
 
     virtual ~DistributedClientNetwork();
 

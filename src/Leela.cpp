@@ -73,6 +73,11 @@ static void calculate_thread_count_cpu(boost::program_options::variables_map & v
     } else {
         cfg_num_threads = cfg_max_threads;
     }
+
+    // usually bogus, but used when using NN client
+    if (vm.count("batchsize")) {
+        cfg_batch_size = vm["batchsize"].as<int>();
+    } 
 }
 
 #ifdef USE_OPENCL

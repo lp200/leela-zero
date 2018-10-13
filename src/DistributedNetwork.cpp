@@ -54,12 +54,16 @@ std::vector<float> DistributedClientNetwork::get_output_from_socket(const std::v
 }
 
 void DistributedClientNetwork::initialize(int playouts, const std::vector<std::string> & serverlist, std::uint64_t hash) {
-    m_serverlist = serverlist;
+    m_servers = std::vector<Server>(serverlist.size());
+    for(auto i=0U; i<serverlist.size(); i++) {
+        m_servers[i].m_server_name = serverlist[i];
+    }
+
     Network::initialize(playouts, "");
 
     // if this didn't create enough threads, the background thread will retry creating more and more
     // if it never creates enough threads, local capability (be it CPU or GPU) will be used
-    init_servers(serverlist, hash);
+    init_servers(hash);
 
     // create a background thread which tries to create new connectins if some are dead.
     // thread stays active forever, hence if somebody wants to have capability of destroying
@@ -71,7 +75,7 @@ void DistributedClientNetwork::initialize(int playouts, const std::vector<std::s
                     std::chrono::seconds(1)
                 );
                 if (m_active_socket_count.load() < static_cast<size_t>(cfg_num_threads)) {
-                    init_servers(m_serverlist, hash);
+                    init_servers(hash);
                 }
             }
         }
@@ -79,9 +83,10 @@ void DistributedClientNetwork::initialize(int playouts, const std::vector<std::s
     m_fork_thread = std::move(t);
 }
 
-void DistributedClientNetwork::init_servers(const std::vector<std::string> & serverlist, std::uint64_t hash) {
-    const auto num_threads = (cfg_num_threads - m_active_socket_count.load() + serverlist.size() - 1) / serverlist.size();
-    for (auto x : serverlist) {
+void DistributedClientNetwork::init_servers(std::uint64_t hash) {
+    const auto num_threads = (cfg_num_threads - m_active_socket_count.load() + m_servers.size() - 1) / m_servers.size();
+    for (auto & s : m_servers) {
+        auto x = s.m_server_name;
         std::vector<std::string> x2;
         boost::split(x2, x, boost::is_any_of(":"));
         if (x2.size() != 2) {
@@ -152,7 +157,8 @@ void DistributedClientNetwork::init_servers(const std::vector<std::string> & ser
             }
 
             m_active_socket_count++;
-            auto w = std::bind([this](std::shared_ptr<tcp::socket> socket) { worker_thread(std::move(*socket)); }, socket );
+            s.m_active_socket_count++;
+            auto w = std::bind([this, &s](std::shared_ptr<tcp::socket> socket) { worker_thread(std::move(*socket), s); }, socket );
             std::thread t(w);
             t.detach();
 
@@ -172,13 +178,17 @@ DistributedClientNetwork::~DistributedClientNetwork() {
     m_running = false;
     m_fork_thread.join();
     
-    m_cv.notify_all();
+    for (auto & s : m_servers) {
+        s.m_cv.notify_all();
+    }
     while (m_active_socket_count.load() > 0) {}
 }
 
 std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_internal(
                                       const std::vector<float> & input_data,
                                       bool selfcheck) {
+
+
     if (selfcheck) {
         assert(m_local_initialized);
         return Network::get_output_internal(input_data, true);
@@ -189,15 +199,42 @@ std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_interna
         return Network::get_output_internal(input_data, selfcheck);
     }
 
+    const auto batch_size = cfg_batch_size > 0 ? cfg_batch_size : 1U;
+    const auto ptr = m_server_ptr++;
+    const auto server_num = (ptr/batch_size) % m_servers.size();
+    auto & server = m_servers[server_num];
+
+    if (server.m_active_socket_count.load() == 0) {
+        if (m_active_socket_count.load() == 0) {
+            std::this_thread::sleep_for(
+                std::chrono::seconds(1)
+            );
+        }
+        return get_output_internal(input_data, selfcheck);
+    } else {
+        // if we are oversubscribing the server...
+        if (server.m_active_eval_count.load() >= server.m_active_socket_count.load()) {
+            // if load ratio is above average, skip
+            if (m_active_eval_count.load() * server.m_active_socket_count.load()
+                 < m_active_socket_count.load() * server.m_active_eval_count.load()) 
+            {
+                return get_output_internal(input_data, selfcheck);
+            }
+        }
+    }
     std::pair<std::vector<float>,float> ret;
 
     auto entry = std::make_shared<ForwardQueueEntry>(input_data, ret);
     std::unique_lock<std::mutex> lk(entry->mutex);
+
     {
-        std::unique_lock<std::mutex> lk(m_forward_mutex);
-        m_forward_queue.push_back(entry);
+        std::unique_lock<std::mutex> lk2(server.m_forward_mutex);
+        server.m_forward_queue.push_back(entry);
     }
-    m_cv.notify_one();
+
+    m_active_eval_count++;
+    server.m_active_eval_count++;
+    server.m_cv.notify_one();
     entry->cv.wait_for(lk, std::chrono::milliseconds(500));
 
     if (!entry->out_ready) {
@@ -214,21 +251,28 @@ std::pair<std::vector<float>,float> DistributedClientNetwork::get_output_interna
         }
 
         lk.unlock();
+
+        m_active_eval_count--;
+        server.m_active_eval_count--;
         return get_output_internal(input_data, selfcheck);
     }
+
+    m_active_eval_count--;
+    server.m_active_eval_count--;
+
     return ret;
 }
 
 
-void DistributedClientNetwork::worker_thread(boost::asio::ip::tcp::socket && socket) {
+void DistributedClientNetwork::worker_thread(boost::asio::ip::tcp::socket && socket, Server & server) {
     while (true) {
-        std::unique_lock<std::mutex> lk(m_forward_mutex);
-        if (m_forward_queue.empty()) {
-            m_cv.wait(lk, [this]() { return !m_forward_queue.empty(); });
+        std::unique_lock<std::mutex> lk(server.m_forward_mutex);
+        if (server.m_forward_queue.empty()) {
+            server.m_cv.wait(lk, [this, &server]() { return !server.m_forward_queue.empty(); });
         }
      
-        auto entry = m_forward_queue.front();
-        m_forward_queue.pop_front();
+        auto entry = server.m_forward_queue.front();
+        server.m_forward_queue.pop_front();
         lk.unlock();
 
     	std::unique_lock<std::mutex> lk2(entry->mutex);
@@ -253,6 +297,7 @@ void DistributedClientNetwork::worker_thread(boost::asio::ip::tcp::socket && soc
             entry->socket = nullptr;
             lk2.unlock();
             m_active_socket_count--;
+            server.m_active_socket_count--;
             return;
         }
     }
