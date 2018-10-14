@@ -308,7 +308,8 @@ void OpenCLScheduler<net_t>::batch_worker(const size_t gnum) {
 
             bool timeout = !m_cv.wait_for(
                 lk,
-                std::chrono::milliseconds(m_waittime),
+//                std::chrono::milliseconds(m_waittime),
+                std::chrono::milliseconds(50),
                 [this] () {
                     return !m_running || static_cast<int>(m_forward_queue.size()) >= cfg_batch_size;
                 }

@@ -117,7 +117,7 @@ static constexpr auto MAX_CPUS = 256;
 // If both BLAS and OpenCL are fully usable, then check the OpenCL
 // results against BLAS with some probability.
 #define USE_OPENCL_SELFCHECK
-static constexpr auto SELFCHECK_PROBABILITY = 2000;
+static constexpr auto SELFCHECK_PROBABILITY = 20000;
 #endif
 
 #if (_MSC_VER >= 1400) /* VC8+ Disable all deprecation warnings */
