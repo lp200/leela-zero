@@ -67,6 +67,72 @@ namespace Utils {
     size_t ceilMultiple(size_t a, size_t b);
 
     const std::string leelaz_file(std::string file);
+
+
+    class bitstream {
+    private:
+        size_t _bitcount = 0;
+        size_t _capacity = 0;
+        std::unique_ptr<std::uint64_t[]> _ptr;
+    public:
+        size_t size() {
+            return _bitcount;
+        }
+    
+        void expand(size_t count) {
+            // make count the next largest multiple-of-64
+            count = (count + 63) / 64;
+            count *= 64;
+    
+            if (_capacity >= count) {
+                return;
+            }
+            
+            auto newptr = new std::uint64_t[count/64];
+            for (size_t i=0; i < _capacity/64; i++) {
+                newptr[i] = _ptr[i];
+            }
+            for(size_t i = _capacity/64; i < count/64; i++) {
+                newptr[i] = 0;
+            }
+            _capacity = count;
+            _ptr.reset(newptr);
+        }
+    
+        void push_bits(size_t count, size_t value) {
+            if (_bitcount + count > _capacity) {
+                expand(_bitcount + count * 2);
+            }
+            while (count > 0) {
+                auto bits_to_add = 64 - _bitcount % 64;
+                if (bits_to_add > count) {
+                    bits_to_add = count;
+                }
+            
+                auto masked_value = value & ((1LL << bits_to_add)-1);
+                _ptr[_bitcount/64] = _ptr[_bitcount/64] | (masked_value << (_bitcount % 64));
+    
+                _bitcount += bits_to_add;
+                count -= bits_to_add;
+                value = value >> bits_to_add;
+            }
+        }
+        size_t read_bits(size_t start_loc, size_t count) const {
+            if (start_loc >= _capacity) {
+                return 0;
+            }
+            auto start_loc_offset = start_loc % 64;
+            if (count > 64 - start_loc_offset) {
+                return 
+                    // upper bits
+                    read_bits(start_loc + 64 - start_loc_offset, count - 64 + start_loc_offset) << (64 - start_loc_offset)
+                    // lower 64-start_loc_offset bits
+                    | (_ptr[start_loc/64] >> start_loc_offset);
+            } else {
+                return (_ptr[start_loc/64] >> start_loc_offset) & ( (1LL << count) - 1);
+            }
+        }
+    };
 }
 
 #endif

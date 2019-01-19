@@ -55,7 +55,7 @@ bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
 
     // Found it.
     ++m_hits;
-    result = entry->result;
+    entry->get(result);
     return true;
 }
 
@@ -109,3 +109,156 @@ void NNCache::dump_stats() {
 size_t NNCache::get_estimated_size() {
     return m_order.size() * NNCache::ENTRY_SIZE;
 }
+
+// symbols
+// V0...V63 : single value of 0 ~ 63
+// Z0...Z15 : 2 ~ 17 consecutive zeros
+// X0...X31 : If previous code was a V, then add 64 * (n+1) to previous value
+//            If previous code was a Z, then append 16 more zeros
+
+constexpr int V_BASE = 0;
+constexpr int Z_BASE = 64;
+constexpr int X_BASE = 80;
+
+// Encoding table rule
+struct NNCompressEncodeTable {
+
+    // The value of the code
+    std::uint16_t code;
+
+    // The bit width of the code
+    std::uint16_t width;
+
+    // The number of codewords matching this entry
+    std::uint16_t count;
+};
+ 
+static constexpr NNCompressEncodeTable encode_table[18] = {
+    { 0x4, 4, 1 }, // V0
+    { 0x0, 3, 1 }, // V1
+    { 0xc, 4, 2 }, // V2 ~ V3
+    { 0x2, 4, 4 }, // V4 ~ V7
+    { 0xa, 4, 8 }, // V8 ~ V15
+    { 0x6, 4, 16}, // V16 ~ V31
+    { 0xe, 4, 32}, // V32 ~ V63
+    { 0x1, 4, 1 }, // Z0
+    { 0x9, 4, 1 }, // Z1
+    { 0x5, 4, 2 }, // Z2 ~ Z3
+    { 0xd, 4, 4 }, // Z4 ~ Z7
+    { 0x3, 4, 8 }, // Z8 ~ Z15
+    { 0xb, 4, 1 }, // X0
+    { 0x7, 5, 1 }, // X1
+    { 0x17, 5, 2}, // X2 ~ X3
+    { 0xf, 5, 4 }, // X4 ~ X7
+    { 0x1f, 6, 8}, // X8 ~ X15
+    { 0x3f, 6, 16}, // X16 ~ X31
+};
+     
+constexpr int bit_log2 (int x) {
+    if (x == 1) return 0;
+    if (x == 2) return 1;
+    if (x == 4) return 2;
+    if (x == 8) return 3;
+    if (x == 16) return 4;
+    if (x == 32) return 5;
+    if (x == 64) return 6;
+    return 7;
+};
+
+
+void NNCache::Entry::get(NNCache::Netresult & ret) const {
+    size_t iptr = 0;
+    int optr = 0;
+    int prev_type = 0;
+    while(optr < NUM_INTERSECTIONS) {
+        int symbol = 0;
+
+        size_t lower_bits = compressed_policy.read_bits(iptr, 10);
+        int symbol_base = 0;
+        for(auto & entry : encode_table) {
+            if(entry.code == (lower_bits & ( (1LL << entry.width) - 1))) {
+                symbol = symbol_base + ((lower_bits >> entry.width) % entry.count);
+                iptr += entry.width + bit_log2(entry.count);
+                break;
+            } else {
+                symbol_base += entry.count;
+            }
+        }
+
+        if(symbol < Z_BASE) {
+            ret.policy[optr++] = symbol / 2048.0;
+            prev_type = 0;
+        }
+        else if(symbol < X_BASE) {
+            for(int i=0; i<symbol-Z_BASE + 2; i++) {
+                ret.policy[optr++] = 0;
+            }
+            prev_type = 1;
+        } else {
+            int bias = symbol - X_BASE + 1;
+            if(prev_type == 0) {
+                ret.policy[optr-1] += 64 / 2048.0 * bias;
+            } else if(prev_type == 1) {
+                for(int i=0; i<bias * 16; i++) {
+                    ret.policy[optr++] = 0;
+                }
+            }
+        }
+    }
+
+    ret.policy_pass = policy_pass;
+    ret.winrate = winrate;
+}
+
+NNCache::Entry::Entry(const Netresult & r) 
+        : policy_pass(r.policy_pass), winrate(r.winrate) 
+{
+    int iptr = 0;
+
+    auto push_symbol = [this](int symbol) {
+        int symbol_base = 0;
+        for(auto & entry : encode_table) {
+            if(symbol >= symbol_base && symbol < symbol_base + entry.count) {
+                size_t code = entry.code;
+                code |= (symbol % entry.count) << entry.width;
+                compressed_policy.push_bits(entry.width + bit_log2(entry.count), code);
+                return;
+            } else {
+                symbol_base += entry.count;
+            }
+        }
+    };
+
+    while(iptr < NUM_INTERSECTIONS) {
+        int v = static_cast<int>(r.policy[iptr] * 2048.0);
+        if(v == 0) {
+            int count = 0;
+            while(iptr < NUM_INTERSECTIONS && static_cast<int>(r.policy[iptr] * 2048.0) == 0) {
+                iptr++;
+                count++;
+            }
+            if(count == 1) {
+                push_symbol(V_BASE);
+            }
+            else {
+                int bias = (count-2)/16;
+                int offset = (count-2)%16;
+                push_symbol(offset + Z_BASE);
+                if(bias != 0) {
+                    push_symbol(bias - 1 + X_BASE);
+                }
+            }
+        }
+        else {
+            int bias = v / 64;
+            int offset = v % 64;
+            push_symbol(V_BASE + offset);
+            if(bias != 0) {
+                push_symbol(X_BASE + bias - 1);
+            }
+            iptr++;
+        }
+    }
+}
+
+

@@ -31,6 +31,7 @@
 #define NNCACHE_H_INCLUDED
 
 #include "config.h"
+#include "Utils.h"
 
 #include <array>
 #include <deque>
@@ -42,10 +43,10 @@ class NNCache {
 public:
 
     // Maximum size of the cache in number of items.
-    static constexpr int MAX_CACHE_COUNT = 150'000;
+    static constexpr int MAX_CACHE_COUNT = 1'500'000;
 
     // Minimum size of the cache in number of items.
-    static constexpr int MIN_CACHE_COUNT = 6'000;
+    static constexpr int MIN_CACHE_COUNT = 60'000;
 
     struct Netresult {
         // 19x19 board positions
@@ -62,10 +63,11 @@ public:
         }
     };
 
-    static constexpr size_t ENTRY_SIZE =
-          sizeof(Netresult)
-        + sizeof(std::uint64_t)
-        + sizeof(std::unique_ptr<Netresult>);
+    // based on empirical observation.
+    // compressed_policy consists of a single pointer, and it points to something
+    // that gets compressed in 32 bytes average.  Add some margin and 64 seems
+    // to be a good approximation.
+    static constexpr size_t ENTRY_SIZE = 64;
 
     NNCache(int size = MAX_CACHE_COUNT);  // ~ 208MiB
 
@@ -102,10 +104,14 @@ private:
     int m_lookups{0};
     int m_inserts{0};
 
-    struct Entry {
-        Entry(const Netresult& r)
-            : result(r) {}
-        Netresult result;  // ~ 1.4KiB
+    class Entry {
+    private:
+        Utils::bitstream compressed_policy;
+        float policy_pass;
+        float winrate;
+    public:
+        void get(Netresult & r) const;
+        Entry(const Netresult& r);
     };
 
     // Map from hash to {features, result}
