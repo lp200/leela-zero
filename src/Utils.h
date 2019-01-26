@@ -75,7 +75,13 @@ namespace Utils {
         size_t _capacity = 0;
         std::unique_ptr<std::uint64_t[]> _ptr;
     public:
-        size_t size() {
+        void clear() {
+            _bitcount = 0;
+            _capacity = 0;
+            _ptr.reset();
+        }
+
+        size_t size() const {
             return _bitcount;
         }
     

@@ -44,6 +44,46 @@ const auto NNCACHE_FILE_LOCAL = std::string("leelaz_nncache_local");
 
 NNCache::NNCache(int size) : m_size(size)
 {
+    std::ifstream ifs(Utils::leelaz_file(NNCACHE_FILE_LOCAL));
+
+    auto skip_magic_number = [&ifs] () {
+        char c;
+        auto count = 0;
+        // find sixteen consecutive 0xff bytes
+        while(ifs.good() && count < 16) {
+            ifs.read(&c, 1);
+            if( c == '\xff') {
+                count++;
+            } else {
+                count = 0;
+            }
+        }
+    };
+
+    while (ifs.good()) {
+        skip_magic_number();
+        
+        Entry e;
+        while (ifs.good()) {
+            size_t pos = ifs.tellg();
+            try {
+                Netresult dummy;
+                auto hash = e.read(ifs);
+                e.get(dummy);
+                m_outfile_map[hash] = pos;
+            } catch (...) {
+                // something went wrong, we should skip until the next magic number to re-sync with stream,
+                // ...but rewind read pointer so that we can properly skip magic number
+                ifs.seekg(pos);
+                break;
+            }
+        }
+    }
+    if(m_outfile_map.size() > 0) {
+        Utils::myprintf("Loaded %d entries from disk based NNCache (%s)\n",
+            m_outfile_map.size(), Utils::leelaz_file(NNCACHE_FILE_LOCAL).c_str());
+    }
+
     m_outfile.open(Utils::leelaz_file(NNCACHE_FILE_LOCAL), std::ios_base::out | std::ios_base::app); 
     
     constexpr char start_header[16] = {
@@ -53,6 +93,29 @@ NNCache::NNCache(int size) : m_size(size)
         '\xff', '\xff', '\xff', '\xff'
     };
     m_outfile.write(start_header, 16);
+}
+
+std::uint64_t NNCache::Entry::read(std::ifstream & ifs, std::uint64_t expected_hash) {
+    unsigned char c;
+    std::uint64_t hash_read;
+    ifs.read((char*)&(hash_read), sizeof(std::uint64_t));
+    if(expected_hash != 0xffff'ffff'ffff'ffffLL && hash_read != expected_hash) {
+        // hash mismatch - something wrong with file?
+        throw std::runtime_error("Unexpected hash value");
+    }
+
+    ifs.read((char*)&(policy_pass), sizeof(float));
+    ifs.read((char*)&(winrate), sizeof(float));
+    ifs.read((char*)&c, 1);
+    compressed_policy.clear();
+    compressed_policy.expand(c*8);
+    for (size_t i = 0; i < c; i++) {
+        unsigned char v;
+        ifs.read((char*)&v, 1);
+        compressed_policy.push_bits(8, v);
+    }
+
+    return hash_read;
 }
 
 bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
@@ -73,18 +136,14 @@ bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
         ifs.open(Utils::leelaz_file(NNCACHE_FILE_LOCAL)); 
         ifs.seekg(iter2->second);
 
-        Entry e;
-        unsigned char c;
-        ifs.read((char*)&(e.policy_pass), sizeof(float));
-        ifs.read((char*)&(e.winrate), sizeof(float));
-        ifs.read((char*)&c, 1);
-        e.compressed_policy.expand(c*8);
-        for (size_t i = 0; i < c-1; i++) {
-            unsigned char v;
-            ifs.read((char*)&v, 1);
-            e.compressed_policy.push_bits(8, v);
+        try {
+            // throws and exception if ended up being parse error
+            Entry e;
+            e.read(ifs, hash);
+            e.get(result);
+        } catch (...) {
+            return false;
         }
-        e.get(result);
 
         ++m_file_hits;
         return true;
@@ -108,17 +167,16 @@ void NNCache::insert(std::uint64_t hash,
 
     auto entry = std::make_unique<Entry>(result);
     auto size_in_bytes = entry->compressed_policy.size();
-    size_in_bytes += 8; // size of the header itself
     size_in_bytes = (size_in_bytes + 7) / 8; // ceil operator
 
     // on an unlikely case where compression result is larger than 255 bytes,
+    // or if the hash REALLY is 0xffff'ffff'ffff'ffffLL
     // we give up saving.
-    if(size_in_bytes < 256 && m_outfile.good()) {
+    if(size_in_bytes < 256 && hash != 0xffff'ffff'ffff'ffffLL && m_outfile.good()) {
         char c = (char)size_in_bytes;
     
-        m_outfile.write((const char*)(&hash), 8);
-
         size_t pos = m_outfile.tellp();
+        m_outfile.write((const char*)(&hash), 8);
         m_outfile.write((const char*)&(entry->policy_pass), sizeof(float));
         m_outfile.write((const char*)&(entry->winrate), sizeof(float));
         m_outfile.write(&c, 1);
@@ -128,17 +186,18 @@ void NNCache::insert(std::uint64_t hash,
         }
 
         m_outfile_map[hash] = pos;
-    }
 
-    //
-    // constexpr char start_header[16] = {
-    //     '\xff', '\xff', '\xff', '\xff',
-    //     '\xff', '\xff', '\xff', '\xff',
-    //     '\xff', '\xff', '\xff', '\xff',
-    //     '\xff', '\xff', '\xff', '\xff'
-    // };
-    // m_outfile.write(start_header, 16);
-    //
+        if (m_outfile_map.size() % 1024 == 0) {
+            constexpr char start_header[16] = {
+                '\xff', '\xff', '\xff', '\xff',
+                '\xff', '\xff', '\xff', '\xff',
+                '\xff', '\xff', '\xff', '\xff',
+                '\xff', '\xff', '\xff', '\xff'
+            };
+            m_outfile.write(start_header, 16);
+        }
+    }
+    
 
     m_cache.emplace(hash, std::move(entry));
     m_order.push_back(hash);
@@ -247,7 +306,7 @@ constexpr int bit_log2 (int x) {
 void NNCache::Entry::get(NNCache::Netresult & ret) const {
     size_t iptr = 0;
     int optr = 0;
-    int prev_type = 0;
+    int prev_type = -1;
     while(optr < NUM_INTERSECTIONS) {
         int symbol = 0;
 
@@ -269,6 +328,9 @@ void NNCache::Entry::get(NNCache::Netresult & ret) const {
         }
         else if(symbol < X_BASE) {
             for(int i=0; i<symbol-Z_BASE + 2; i++) {
+                if (optr >= NUM_INTERSECTIONS) {
+                    throw std::runtime_error("Buffer overflow");
+                }
                 ret.policy[optr++] = 0;
             }
             prev_type = 1;
@@ -278,14 +340,25 @@ void NNCache::Entry::get(NNCache::Netresult & ret) const {
                 ret.policy[optr-1] += 64 / 2048.0 * bias;
             } else if(prev_type == 1) {
                 for(int i=0; i<bias * 16; i++) {
+                    if (optr >= NUM_INTERSECTIONS) {
+                        throw std::runtime_error("Buffer overflow");
+                    }
                     ret.policy[optr++] = 0;
                 }
+            } else {
+                throw std::runtime_error("Didn't expect X type symbol");
             }
+            prev_type = -1;
         }
     }
 
     ret.policy_pass = policy_pass;
     ret.winrate = winrate;
+
+    if(iptr > compressed_policy.size() || iptr < compressed_policy.size() - 8) {
+        // A 8-bit margin due to how serialization-to-disk works
+        throw std::runtime_error("Unexpected size");
+    }
 }
 
 NNCache::Entry::Entry(const Netresult & r) 

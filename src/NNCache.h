@@ -112,7 +112,9 @@ private:
         float winrate;
 
         void get(Netresult & r) const;
-        Entry(){}
+        std::uint64_t read(std::ifstream & ifs, std::uint64_t expected_hash = 0xffff'ffff'ffff'ffffLL);
+
+        Entry() {}
         Entry(const Netresult& r);
     };
 
