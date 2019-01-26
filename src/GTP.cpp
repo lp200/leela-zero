@@ -213,6 +213,8 @@ const std::string GTP::s_commands[] = {
     "lz-genmove_analyze",
     "lz-memory_report",
     "lz-setoption",
+    "lz-read_cache",
+    "lz-dump_cache",
     ""
 };
 
@@ -267,6 +269,12 @@ void GTP::execute(GameState & game, const std::string& xinput) {
 
     // Required on Unixy systems
     if (xinput.find("loadsgf") != std::string::npos) {
+        transform_lowercase = false;
+    }
+    if (
+        xinput.find("lz-dump_cache") != std::string::npos
+        || xinput.find("lz-read_cache") != std::string::npos
+    ) {
         transform_lowercase = false;
     }
 
@@ -967,6 +975,28 @@ void GTP::execute(GameState & game, const std::string& xinput) {
             "Estimated total memory consumption: %d MiB.\n"
             "Network with overhead: %d MiB / Search tree: %d MiB / Network cache: %d\n",
             total / MiB, base_memory / MiB, tree_size / MiB, cache_size / MiB);
+        return;
+    } else if (command.find("lz-read_cache") == 0) {
+        std::istringstream cmdstream(command);
+        std::string tmp, cachename;
+        cmdstream >> tmp >> cachename;
+        bool success = s_network->load_cachefile(cachename, true);
+        if (success) {
+            gtp_printf(id, "");
+        } else {
+            gtp_fail_printf(id, "Cannot open file %s", cachename.c_str());
+        }
+        return;
+    } else if (command.find("lz-dump_cache") == 0) {
+        std::istringstream cmdstream(command);
+        std::string tmp, cachename;
+        cmdstream >> tmp >> cachename;
+        bool success = s_network->load_cachefile(cachename, false);
+        if (success) {
+            gtp_printf(id, "");
+        } else {
+            gtp_fail_printf(id, "Cannot open file %s", cachename.c_str());
+        }
         return;
     } else if (command.find("lz-setoption") == 0) {
         return execute_setoption(*search.get(), id, command);

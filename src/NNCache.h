@@ -94,6 +94,8 @@ public:
 
     // Return the estimated memory consumption of the cache.
     size_t get_estimated_size();
+
+    bool load_cachefile(std::string filename, bool read_only);
 private:
     SMP::RWMutex m_mutex;
 
@@ -118,6 +120,8 @@ private:
         Entry(const Netresult& r);
     };
 
+    // filename of the cache file
+    std::string m_filename;
     // Map from hash to {features, result}
     std::unordered_map<std::uint64_t, std::unique_ptr<const Entry>> m_cache;
     // Order entries were added to the map.

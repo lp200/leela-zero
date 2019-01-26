@@ -40,60 +40,117 @@ const int NNCache::MAX_CACHE_COUNT;
 const int NNCache::MIN_CACHE_COUNT;
 const size_t NNCache::ENTRY_SIZE;
 
-const auto NNCACHE_FILE_LOCAL = std::string("leelaz_nncache_local");
+NNCache::NNCache(int size) : m_size(size) {}
 
-NNCache::NNCache(int size) : m_size(size)
-{
-    std::ifstream ifs(Utils::leelaz_file(NNCACHE_FILE_LOCAL));
+bool NNCache::load_cachefile(std::string filename, bool read_only) {
+    bool file_did_not_exist = false;
 
-    auto skip_magic_number = [&ifs] () {
-        char c;
-        auto count = 0;
-        // find sixteen consecutive 0xff bytes
-        while(ifs.good() && count < 16) {
-            ifs.read(&c, 1);
-            if( c == '\xff') {
-                count++;
-            } else {
-                count = 0;
-            }
-        }
-    };
+    m_outfile_map.clear();
+    m_outfile.close();
 
-    while (ifs.good()) {
-        skip_magic_number();
-        
-        Entry e;
-        while (ifs.good()) {
-            size_t pos = ifs.tellg();
-            try {
-                Netresult dummy;
-                auto hash = e.read(ifs);
-                e.get(dummy);
-                m_outfile_map[hash] = pos;
-            } catch (...) {
-                // something went wrong, we should skip until the next magic number to re-sync with stream,
-                // ...but rewind read pointer so that we can properly skip magic number
-                ifs.seekg(pos);
-                break;
-            }
+    m_filename = filename;
+
+    std::ifstream ifs(filename);
+
+    // if read-only, the file should exist and should be readible.
+    // Otherwise there is something worong.
+    if (!ifs.good()) {
+        file_did_not_exist = true;
+        if (read_only) {
+            m_filename = "";
+            return false;
         }
     }
-    if(m_outfile_map.size() > 0) {
-        Utils::myprintf("Loaded %d entries from disk based NNCache (%s)\n",
-            m_outfile_map.size(), Utils::leelaz_file(NNCACHE_FILE_LOCAL).c_str());
-    }
 
-    m_outfile.open(Utils::leelaz_file(NNCACHE_FILE_LOCAL), std::ios_base::out | std::ios_base::app); 
+    if (!file_did_not_exist) {
+        // if the file pre-existed, check if the first four bytes are "\xfeLNC"
+        // which is the magic number for this file
+        char b[4];
+        ifs.read(b, 4);
+        if (b[0] == '\xfe' && b[1] == 'L' && b[2] == 'N' && b[3] == 'C') {
+
+        } else {
+            Utils::myprintf("File '%s' does not seems to be a leela-zero NNCache file\n",
+                filename.c_str()
+            );   
+            return false;
+        }
     
-    constexpr char start_header[16] = {
-        '\xff', '\xff', '\xff', '\xff',
-        '\xff', '\xff', '\xff', '\xff',
-        '\xff', '\xff', '\xff', '\xff',
-        '\xff', '\xff', '\xff', '\xff'
-    };
-    m_outfile.write(start_header, 16);
+        // sixteen 0xff values are inserted periodically to mark a new start of a net.
+        // This is to be more resillient to data corruptions
+        auto skip_guard = [&ifs] () {
+            char c;
+            auto count = 0;
+            // find sixteen consecutive 0xff bytes
+            while(ifs.good() && count < 16) {
+                ifs.read(&c, 1);
+                if( c == '\xff') {
+                    count++;
+                } else {
+                    count = 0;
+                }
+            }
+        };
+    
+        while (ifs.good()) {
+            skip_guard();
+            
+            Entry e;
+            while (ifs.good()) {
+                size_t pos = ifs.tellg();
+                try {
+                    Netresult dummy;
+                    auto hash = e.read(ifs);
+                    e.get(dummy);
+                    m_outfile_map[hash] = pos;
+                } catch (...) {
+                    // something went wrong, we should skip until the next magic number to re-sync with stream,
+                    // ...but rewind read pointer so that we can properly skip magic number
+                    ifs.seekg(pos);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!m_outfile_map.empty()) {
+        Utils::myprintf("Loaded %d entries from disk based NNCache (%s)\n",
+            m_outfile_map.size(), m_filename.c_str());
+    } else if (read_only) {
+        // a read-only mode and zero records. hmm...
+        m_filename = "";
+        return false;
+    }
+
+    if (!read_only) {
+        m_outfile.open(filename, std::ios_base::out | std::ios_base::app); 
+        
+        if (file_did_not_exist) {
+            constexpr char magic_number[4] = { '\xfe', 'L', 'N', 'C' };
+            m_outfile.write(magic_number, 4);
+            if (m_outfile.good()) {
+                Utils::myprintf("Created new disk based NNCache (%s)\n", m_filename.c_str());
+            }
+        }
+
+        constexpr char start_header[16] = {
+            '\xff', '\xff', '\xff', '\xff',
+            '\xff', '\xff', '\xff', '\xff',
+            '\xff', '\xff', '\xff', '\xff',
+            '\xff', '\xff', '\xff', '\xff'
+        };
+        m_outfile.write(start_header, 16);
+
+        // if we are bad at this point, then we probably should consider failure
+        if (!m_outfile.good()) {
+            m_outfile.close();
+            Utils::myprintf("Failed to start writing file\n");
+            return false;
+        }
+    }
+    return true;
 }
+
 
 std::uint64_t NNCache::Entry::read(std::ifstream & ifs, std::uint64_t expected_hash) {
     unsigned char c;
@@ -132,8 +189,10 @@ bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
             return false;  // Not found.
         }
 
+        // at this point the file should open and run.
+
         std::ifstream ifs;
-        ifs.open(Utils::leelaz_file(NNCACHE_FILE_LOCAL)); 
+        ifs.open(m_filename); 
         ifs.seekg(iter2->second);
 
         try {
@@ -172,7 +231,9 @@ void NNCache::insert(std::uint64_t hash,
     // on an unlikely case where compression result is larger than 255 bytes,
     // or if the hash REALLY is 0xffff'ffff'ffff'ffffLL
     // we give up saving.
-    if(size_in_bytes < 256 && hash != 0xffff'ffff'ffff'ffffLL && m_outfile.good()) {
+    if(size_in_bytes < 256 && hash != 0xffff'ffff'ffff'ffffLL 
+        && m_outfile.is_open() && m_outfile.good()) 
+    {
         char c = (char)size_in_bytes;
     
         size_t pos = m_outfile.tellp();

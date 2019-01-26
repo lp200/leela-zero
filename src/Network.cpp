@@ -379,6 +379,10 @@ std::pair<int, int> Network::load_network_file(const std::string& filename) {
     return {0, 0};
 }
 
+bool Network::load_cachefile(std::string filename, bool read_only) {
+    return m_nncache.load_cachefile(filename, read_only);
+}
+
 std::unique_ptr<ForwardPipe>&& Network::init_net(int channels,
     std::unique_ptr<ForwardPipe>&& pipe) {
 
