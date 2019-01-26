@@ -1023,5 +1023,5 @@ size_t Network::get_estimated_cache_size() {
 }
 
 void Network::nncache_resize(int max_count) {
-    return m_nncache.resize(max_count);
+    return m_nncache.set_size_from_playouts(max_count);
 }

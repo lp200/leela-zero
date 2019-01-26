@@ -40,15 +40,54 @@ const int NNCache::MAX_CACHE_COUNT;
 const int NNCache::MIN_CACHE_COUNT;
 const size_t NNCache::ENTRY_SIZE;
 
-NNCache::NNCache(int size) : m_size(size) {}
+const auto NNCACHE_FILE_LOCAL = std::string("leelaz_nncache_local");
+
+NNCache::NNCache(int size) : m_size(size)
+{
+    m_outfile.open(Utils::leelaz_file(NNCACHE_FILE_LOCAL), std::ios_base::out | std::ios_base::app); 
+    
+    constexpr char start_header[16] = {
+        '\xff', '\xff', '\xff', '\xff',
+        '\xff', '\xff', '\xff', '\xff',
+        '\xff', '\xff', '\xff', '\xff',
+        '\xff', '\xff', '\xff', '\xff'
+    };
+    m_outfile.write(start_header, 16);
+}
 
 bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    RLOCK(m_mutex, lock);
     ++m_lookups;
+    if(m_lookups % 100000 == 0) {
+        dump_stats();
+    }
 
     auto iter = m_cache.find(hash);
     if (iter == m_cache.end()) {
-        return false;  // Not found.
+        auto iter2 = m_outfile_map.find(hash);
+        if(iter2 == m_outfile_map.end()) {
+            return false;  // Not found.
+        }
+
+        std::ifstream ifs;
+        ifs.open(Utils::leelaz_file(NNCACHE_FILE_LOCAL)); 
+        ifs.seekg(iter2->second);
+
+        Entry e;
+        unsigned char c;
+        ifs.read((char*)&(e.policy_pass), sizeof(float));
+        ifs.read((char*)&(e.winrate), sizeof(float));
+        ifs.read((char*)&c, 1);
+        e.compressed_policy.expand(c*8);
+        for (size_t i = 0; i < c-1; i++) {
+            unsigned char v;
+            ifs.read((char*)&v, 1);
+            e.compressed_policy.push_bits(8, v);
+        }
+        e.get(result);
+
+        ++m_file_hits;
+        return true;
     }
 
     const auto& entry = iter->second;
@@ -61,13 +100,47 @@ bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
 
 void NNCache::insert(std::uint64_t hash,
                      const Netresult& result) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    WLOCK(m_mutex, lock);
 
     if (m_cache.find(hash) != m_cache.end()) {
         return;  // Already in the cache.
     }
 
-    m_cache.emplace(hash, std::make_unique<Entry>(result));
+    auto entry = std::make_unique<Entry>(result);
+    auto size_in_bytes = entry->compressed_policy.size();
+    size_in_bytes += 8; // size of the header itself
+    size_in_bytes = (size_in_bytes + 7) / 8; // ceil operator
+
+    // on an unlikely case where compression result is larger than 255 bytes,
+    // we give up saving.
+    if(size_in_bytes < 256 && m_outfile.good()) {
+        char c = (char)size_in_bytes;
+    
+        m_outfile.write((const char*)(&hash), 8);
+
+        size_t pos = m_outfile.tellp();
+        m_outfile.write((const char*)&(entry->policy_pass), sizeof(float));
+        m_outfile.write((const char*)&(entry->winrate), sizeof(float));
+        m_outfile.write(&c, 1);
+        for (size_t i = 0; i < entry->compressed_policy.size(); i += 8) {
+            unsigned char v = entry->compressed_policy.read_bits(i, 8);
+            m_outfile.write((char*)&v, 1);
+        }
+
+        m_outfile_map[hash] = pos;
+    }
+
+    //
+    // constexpr char start_header[16] = {
+    //     '\xff', '\xff', '\xff', '\xff',
+    //     '\xff', '\xff', '\xff', '\xff',
+    //     '\xff', '\xff', '\xff', '\xff',
+    //     '\xff', '\xff', '\xff', '\xff'
+    // };
+    // m_outfile.write(start_header, 16);
+    //
+
+    m_cache.emplace(hash, std::move(entry));
     m_order.push_back(hash);
     ++m_inserts;
 
@@ -101,9 +174,14 @@ void NNCache::set_size_from_playouts(int max_playouts) {
 
 void NNCache::dump_stats() {
     Utils::myprintf(
-        "NNCache: %d/%d hits/lookups = %.1f%% hitrate, %d inserts, %u size\n",
+        "NNCache memory: %d/%d hits/lookups = %.1f%% hitrate, %d inserts, %u size\n",
         m_hits, m_lookups, 100. * m_hits / (m_lookups + 1),
         m_inserts, m_cache.size());
+
+    Utils::myprintf(
+        "NNCache file: %d/%d hits/lookups = %.1f%% hitrate, %d inserts, %u size\n",
+        m_file_hits, m_lookups, 100. * m_file_hits / (m_lookups + 1),
+        m_inserts, m_outfile_map.size());
 }
 
 size_t NNCache::get_estimated_size() {
@@ -211,8 +289,9 @@ void NNCache::Entry::get(NNCache::Netresult & ret) const {
 }
 
 NNCache::Entry::Entry(const Netresult & r) 
-        : policy_pass(r.policy_pass), winrate(r.winrate) 
 {
+    policy_pass = r.policy_pass;
+    winrate = r.winrate;
     int iptr = 0;
 
     auto push_symbol = [this](int symbol) {

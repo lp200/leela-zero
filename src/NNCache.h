@@ -32,21 +32,22 @@
 
 #include "config.h"
 #include "Utils.h"
+#include "SMP.h"
 
 #include <array>
 #include <deque>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
+#include <fstream>
 
 class NNCache {
 public:
 
     // Maximum size of the cache in number of items.
-    static constexpr int MAX_CACHE_COUNT = 1'500'000;
+    static constexpr int MAX_CACHE_COUNT = 150'000;
 
     // Minimum size of the cache in number of items.
-    static constexpr int MIN_CACHE_COUNT = 60'000;
+    static constexpr int MIN_CACHE_COUNT = 6'000;
 
     struct Netresult {
         // 19x19 board positions
@@ -67,7 +68,7 @@ public:
     // compressed_policy consists of a single pointer, and it points to something
     // that gets compressed in 32 bytes average.  Add some margin and 64 seems
     // to be a good approximation.
-    static constexpr size_t ENTRY_SIZE = 64;
+    static constexpr size_t ENTRY_SIZE = 15000;
 
     NNCache(int size = MAX_CACHE_COUNT);  // ~ 208MiB
 
@@ -94,23 +95,24 @@ public:
     // Return the estimated memory consumption of the cache.
     size_t get_estimated_size();
 private:
-
-    std::mutex m_mutex;
+    SMP::RWMutex m_mutex;
 
     size_t m_size;
 
     // Statistics
     int m_hits{0};
+    int m_file_hits{0};
     int m_lookups{0};
     int m_inserts{0};
 
     class Entry {
-    private:
+    public:
         Utils::bitstream compressed_policy;
         float policy_pass;
         float winrate;
-    public:
+
         void get(Netresult & r) const;
+        Entry(){}
         Entry(const Netresult& r);
     };
 
@@ -118,6 +120,11 @@ private:
     std::unordered_map<std::uint64_t, std::unique_ptr<const Entry>> m_cache;
     // Order entries were added to the map.
     std::deque<size_t> m_order;
+
+    // lock-protected write fstream
+    std::ofstream m_outfile;
+    // (hash, starting_position_of_value) pair of m_outfile
+    std::unordered_map<std::uint64_t, size_t> m_outfile_map;
 };
 
 #endif
