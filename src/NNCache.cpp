@@ -40,8 +40,6 @@ const int NNCache::MAX_CACHE_COUNT;
 const int NNCache::MIN_CACHE_COUNT;
 const size_t NNCache::ENTRY_SIZE;
 
-NNCache::NNCache(int size) : m_size(size) {}
-
 bool NNCache::load_cachefile(std::string filename, bool read_only) {
     bool file_did_not_exist = false;
 
@@ -62,6 +60,10 @@ bool NNCache::load_cachefile(std::string filename, bool read_only) {
         }
     }
 
+    // prepare memory.  this will prune out some of the (normal) cache entries
+    // if the memory map is too big
+    resize(m_size, true);
+
     if (!file_did_not_exist) {
         // if the file pre-existed, check if the first four bytes are "\xfeLNC"
         // which is the magic number for this file
@@ -72,10 +74,10 @@ bool NNCache::load_cachefile(std::string filename, bool read_only) {
         } else {
             Utils::myprintf("File '%s' does not seems to be a leela-zero NNCache file\n",
                 filename.c_str()
-            );   
+            );
             return false;
         }
-    
+
         // sixteen 0xff values are inserted periodically to mark a new start of a net.
         // This is to be more resillient to data corruptions
         auto skip_guard = [&ifs] () {
@@ -91,17 +93,18 @@ bool NNCache::load_cachefile(std::string filename, bool read_only) {
                 }
             }
         };
-    
+
+
         while (ifs.good()) {
             skip_guard();
-            
-            Entry e;
+
+            CompressedEntry e;
             while (ifs.good()) {
                 size_t pos = ifs.tellg();
                 try {
                     Netresult dummy;
                     auto hash = e.read(ifs);
-                    e.get(dummy);
+                    e.test_get();
                     m_outfile_map[hash] = pos;
                 } catch (...) {
                     // something went wrong, we should skip until the next magic number to re-sync with stream,
@@ -123,8 +126,7 @@ bool NNCache::load_cachefile(std::string filename, bool read_only) {
     }
 
     if (!read_only) {
-        m_outfile.open(filename, std::ios_base::out | std::ios_base::app); 
-        
+        m_outfile.open(filename, std::ios_base::out | std::ios_base::app);
         if (file_did_not_exist) {
             constexpr char magic_number[4] = { '\xfe', 'L', 'N', 'C' };
             m_outfile.write(magic_number, 4);
@@ -148,11 +150,12 @@ bool NNCache::load_cachefile(std::string filename, bool read_only) {
             return false;
         }
     }
+
     return true;
 }
 
 
-std::uint64_t NNCache::Entry::read(std::ifstream & ifs, std::uint64_t expected_hash) {
+std::uint64_t NNCache::CompressedEntry::read(std::ifstream & ifs, std::uint64_t expected_hash) {
     unsigned char c;
     std::uint64_t hash_read;
     ifs.read((char*)&(hash_read), sizeof(std::uint64_t));
@@ -178,9 +181,6 @@ std::uint64_t NNCache::Entry::read(std::ifstream & ifs, std::uint64_t expected_h
 bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
     RLOCK(m_mutex, lock);
     ++m_lookups;
-    if(m_lookups % 100000 == 0) {
-        dump_stats();
-    }
 
     auto iter = m_cache.find(hash);
     if (iter == m_cache.end()) {
@@ -190,14 +190,13 @@ bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
         }
 
         // at this point the file should open and run.
-
         std::ifstream ifs;
-        ifs.open(m_filename); 
+        ifs.open(m_filename);
         ifs.seekg(iter2->second);
 
         try {
             // throws and exception if ended up being parse error
-            Entry e;
+            CompressedEntry e;
             e.read(ifs, hash);
             e.get(result);
         } catch (...) {
@@ -212,7 +211,7 @@ bool NNCache::lookup(std::uint64_t hash, Netresult & result) {
 
     // Found it.
     ++m_hits;
-    entry->get(result);
+    result = entry->result;
     return true;
 }
 
@@ -224,25 +223,25 @@ void NNCache::insert(std::uint64_t hash,
         return;  // Already in the cache.
     }
 
-    auto entry = std::make_unique<Entry>(result);
-    auto size_in_bytes = entry->compressed_policy.size();
+    CompressedEntry ce(result);
+    auto size_in_bytes = ce.compressed_policy.size();
     size_in_bytes = (size_in_bytes + 7) / 8; // ceil operator
 
     // on an unlikely case where compression result is larger than 255 bytes,
     // or if the hash REALLY is 0xffff'ffff'ffff'ffffLL
     // we give up saving.
-    if(size_in_bytes < 256 && hash != 0xffff'ffff'ffff'ffffLL 
-        && m_outfile.is_open() && m_outfile.good()) 
+    if(size_in_bytes < 256 && hash != 0xffff'ffff'ffff'ffffLL
+        && m_outfile.is_open() && m_outfile.good())
     {
         char c = (char)size_in_bytes;
-    
         size_t pos = m_outfile.tellp();
+
         m_outfile.write((const char*)(&hash), 8);
-        m_outfile.write((const char*)&(entry->policy_pass), sizeof(float));
-        m_outfile.write((const char*)&(entry->winrate), sizeof(float));
+        m_outfile.write((const char*)&(ce.policy_pass), sizeof(float));
+        m_outfile.write((const char*)&(ce.winrate), sizeof(float));
         m_outfile.write(&c, 1);
-        for (size_t i = 0; i < entry->compressed_policy.size(); i += 8) {
-            unsigned char v = entry->compressed_policy.read_bits(i, 8);
+        for (size_t i = 0; i < ce.compressed_policy.size(); i += 8) {
+            unsigned char v = ce.compressed_policy.read_bits(i, 8);
             m_outfile.write((char*)&v, 1);
         }
 
@@ -257,39 +256,66 @@ void NNCache::insert(std::uint64_t hash,
             };
             m_outfile.write(start_header, 16);
         }
-    }
-    
 
-    m_cache.emplace(hash, std::move(entry));
+        // this will somewhat randomly erase from filemap.
+        // this simply makes the cache entry 'inaccessible', and
+        // nothing will be lost from the file itself.
+        // consider this to be a way to prevent the memory from blowing up...
+        if (m_outfile_map.size() > m_max_outfile_map_size) {
+            m_outfile_map.erase(m_outfile_map.begin());
+        }
+    }
+
+    m_cache.emplace(hash, std::make_unique<Entry>(result));
     m_order.push_back(hash);
     ++m_inserts;
 
     // If the cache is too large, remove the oldest entry.
-    if (m_order.size() > m_size) {
+    if (m_order.size() > m_max_cache_size) {
         m_cache.erase(m_order.front());
         m_order.pop_front();
     }
 }
 
-void NNCache::resize(int size) {
+void NNCache::resize(int size, bool reserve_filecache) {
     m_size = size;
-    while (m_order.size() > m_size) {
+
+    assert(size >= MIN_CACHE_COUNT);
+
+    // if we have a file-backed cache:
+    // - Allocate the first MIN_CACHE_COUNT entries to normal cache
+    // - Until we hit MAX_CACHE_COUNT we allocate half to normal cache, other half to file backed cache
+    // - Anything beyond MAX_CACHE_COUNT goes to file backed cache
+    if (reserve_filecache || m_outfile.good() || !m_outfile_map.empty()) {
+        if (size < MIN_CACHE_COUNT) {
+            size = MIN_CACHE_COUNT;
+        }
+
+        size = MIN_CACHE_COUNT + (size - MIN_CACHE_COUNT) / 2;
+
+        if (size > MAX_CACHE_COUNT) {
+            size = MAX_CACHE_COUNT;
+        }
+    }
+    
+    m_max_cache_size = size;
+    m_max_outfile_map_size = (m_size - size) * ENTRY_SIZE / 32;
+
+    Utils::myprintf("NNCache budgeting : %d cache, %d filemap\n",
+        m_max_cache_size,
+        m_max_outfile_map_size
+    );
+    while (m_order.size() > m_max_cache_size) {
         m_cache.erase(m_order.front());
         m_order.pop_front();
     }
-}
 
-void NNCache::set_size_from_playouts(int max_playouts) {
-    // cache hits are generally from last several moves so setting cache
-    // size based on playouts increases the hit rate while balancing memory
-    // usage for low playout instances. 150'000 cache entries is ~208 MiB
-    constexpr auto num_cache_moves = 3;
-    auto max_playouts_per_move =
-        std::min(max_playouts,
-                 UCTSearch::UNLIMITED_PLAYOUTS / num_cache_moves);
-    auto max_size = num_cache_moves * max_playouts_per_move;
-    max_size = std::min(MAX_CACHE_COUNT, std::max(MIN_CACHE_COUNT, max_size));
-    resize(max_size);
+    // this will somewhat randomly erase from filemap.
+    // this simply makes the cache entry 'inaccessible'
+    while (m_outfile_map.size() > m_max_outfile_map_size) {
+        m_outfile_map.erase(m_outfile_map.begin());
+    }
+    m_outfile_map.reserve(m_max_outfile_map_size);
 }
 
 void NNCache::dump_stats() {
@@ -305,7 +331,7 @@ void NNCache::dump_stats() {
 }
 
 size_t NNCache::get_estimated_size() {
-    return m_order.size() * NNCache::ENTRY_SIZE;
+    return m_order.size() * NNCache::ENTRY_SIZE + m_outfile_map.size() * 32;
 }
 
 // symbols
@@ -330,7 +356,7 @@ struct NNCompressEncodeTable {
     // The number of codewords matching this entry
     std::uint16_t count;
 };
- 
+
 static constexpr NNCompressEncodeTable encode_table[18] = {
     { 0x4, 4, 1 }, // V0
     { 0x0, 3, 1 }, // V1
@@ -351,7 +377,7 @@ static constexpr NNCompressEncodeTable encode_table[18] = {
     { 0x1f, 6, 8}, // X8 ~ X15
     { 0x3f, 6, 16}, // X16 ~ X31
 };
-     
+
 constexpr int bit_log2 (int x) {
     if (x == 1) return 0;
     if (x == 2) return 1;
@@ -364,7 +390,59 @@ constexpr int bit_log2 (int x) {
 };
 
 
-void NNCache::Entry::get(NNCache::Netresult & ret) const {
+void NNCache::CompressedEntry::test_get() const {
+    size_t iptr = 0;
+    int optr = 0;
+    int prev_type = -1;
+    while(optr < NUM_INTERSECTIONS) {
+        int symbol = 0;
+
+        size_t lower_bits = compressed_policy.read_bits(iptr, 10);
+        int symbol_base = 0;
+        for(auto & entry : encode_table) {
+            if(entry.code == (lower_bits & ( (1LL << entry.width) - 1))) {
+                symbol = symbol_base + ((lower_bits >> entry.width) % entry.count);
+                iptr += entry.width + bit_log2(entry.count);
+                break;
+            } else {
+                symbol_base += entry.count;
+            }
+        }
+
+        if(symbol < Z_BASE) {
+            optr++;
+            prev_type = 0;
+        }
+        else if(symbol < X_BASE) {
+            optr += symbol-Z_BASE + 2;
+            if (optr > NUM_INTERSECTIONS) {
+                throw std::runtime_error("Buffer overflow");
+            }
+            prev_type = 1;
+        } else {
+            int bias = symbol - X_BASE + 1;
+            if(prev_type == 0) {
+                // empty
+            } else if(prev_type == 1) {
+		optr += bias * 16;
+                if (optr > NUM_INTERSECTIONS) {
+                    throw std::runtime_error("Buffer overflow");
+                }
+            } else {
+                throw std::runtime_error("Didn't expect X type symbol");
+            }
+            prev_type = -1;
+        }
+    }
+
+    if(iptr > compressed_policy.size() || iptr < compressed_policy.size() - 8) {
+        // A 8-bit margin due to how serialization-to-disk works
+        throw std::runtime_error("Unexpected size");
+    }
+}
+
+
+void NNCache::CompressedEntry::get(NNCache::Netresult & ret) const {
     size_t iptr = 0;
     int optr = 0;
     int prev_type = -1;
@@ -422,8 +500,7 @@ void NNCache::Entry::get(NNCache::Netresult & ret) const {
     }
 }
 
-NNCache::Entry::Entry(const Netresult & r) 
-{
+NNCache::CompressedEntry::CompressedEntry(const Netresult & r) {
     policy_pass = r.policy_pass;
     winrate = r.winrate;
     int iptr = 0;
@@ -473,5 +550,3 @@ NNCache::Entry::Entry(const Netresult & r)
         }
     }
 }
-
-

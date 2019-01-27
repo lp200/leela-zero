@@ -84,16 +84,16 @@ namespace Utils {
         size_t size() const {
             return _bitcount;
         }
-    
+
         void expand(size_t count) {
             // make count the next largest multiple-of-64
             count = (count + 63) / 64;
             count *= 64;
-    
+
             if (_capacity >= count) {
                 return;
             }
-            
+
             auto newptr = new std::uint64_t[count/64];
             for (size_t i=0; i < _capacity/64; i++) {
                 newptr[i] = _ptr[i];
@@ -104,7 +104,7 @@ namespace Utils {
             _capacity = count;
             _ptr.reset(newptr);
         }
-    
+
         void push_bits(size_t count, size_t value) {
             if (_bitcount + count > _capacity) {
                 expand(_bitcount + count * 2);
@@ -114,10 +114,10 @@ namespace Utils {
                 if (bits_to_add > count) {
                     bits_to_add = count;
                 }
-            
+
                 auto masked_value = value & ((1LL << bits_to_add)-1);
                 _ptr[_bitcount/64] = _ptr[_bitcount/64] | (masked_value << (_bitcount % 64));
-    
+
                 _bitcount += bits_to_add;
                 count -= bits_to_add;
                 value = value >> bits_to_add;
@@ -129,7 +129,7 @@ namespace Utils {
             }
             auto start_loc_offset = start_loc % 64;
             if (count > 64 - start_loc_offset) {
-                return 
+                return
                     // upper bits
                     read_bits(start_loc + 64 - start_loc_offset, count - 64 + start_loc_offset) << (64 - start_loc_offset)
                     // lower 64-start_loc_offset bits

@@ -411,8 +411,7 @@ static void parse_commandline(int argc, char *argv[]) {
 
 static void initialize_network() {
     auto network = std::make_unique<Network>();
-    auto playouts = std::min(cfg_max_playouts, cfg_max_visits);
-    network->initialize(playouts, cfg_weightsfile);
+    network->initialize(cfg_weightsfile);
 
     GTP::initialize(std::move(network));
 }

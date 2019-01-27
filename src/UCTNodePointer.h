@@ -56,23 +56,23 @@ class UCTNode;
 class UCTNodePointer {
 private:
     static constexpr std::uint64_t INVALID = 2;
-    static constexpr std::uint64_t POINTER = 0;
-    static constexpr std::uint64_t UNINFLATED = 1;
+    static constexpr std::uint64_t POINTER = 1;
+    static constexpr std::uint64_t UNINFLATED = 0;
 
     static std::atomic<size_t> m_tree_size;
     static void increment_tree_size(size_t sz);
     static void decrement_tree_size(size_t sz);
 
     // the raw storage used here.
-    // if bit [1:0] is 0, m_data is the actual pointer.
-    // if bit [1:0] is 1, bit [31:16] is the vertex value, bit [63:32] is the policy
+    // if bit [1:0] is 1, m_data is the actual pointer.
+    // if bit [1:0] is 0, bit [31:16] is the vertex value, bit [63:32] is the policy
     // if bit [1:0] is other values, it should assert-fail
     // (C-style bit fields and unions are not portable)
     mutable std::atomic<std::uint64_t> m_data{INVALID};
 
     UCTNode * read_ptr(uint64_t v) const {
         assert((v & 3ULL) == POINTER);
-        return reinterpret_cast<UCTNode*>(v);
+        return reinterpret_cast<UCTNode*>(v & ~(0x3ULL));
     }
 
     std::int16_t read_vertex(uint64_t v) const {

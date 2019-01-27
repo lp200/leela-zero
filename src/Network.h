@@ -87,7 +87,7 @@ public:
     static constexpr auto OUTPUTS_VALUE = 1;
     static constexpr auto VALUE_LAYER = 256;
 
-    void initialize(int playouts, const std::string & weightsfile);
+    void initialize(const std::string & weightsfile);
 
     float benchmark_time(int centiseconds);
     void benchmark(const GameState * const state,

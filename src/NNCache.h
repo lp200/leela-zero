@@ -64,19 +64,13 @@ public:
         }
     };
 
-    // based on empirical observation.
-    // compressed_policy consists of a single pointer, and it points to something
-    // that gets compressed in 32 bytes average.  Add some margin and 64 seems
-    // to be a good approximation.
-    static constexpr size_t ENTRY_SIZE = 15000;
-
-    NNCache(int size = MAX_CACHE_COUNT);  // ~ 208MiB
-
-    // Set a reasonable size gives max number of playouts
-    void set_size_from_playouts(int max_playouts);
+    static constexpr size_t ENTRY_SIZE =
+          sizeof(Netresult)
+        + sizeof(std::uint64_t)
+        + sizeof(std::unique_ptr<Netresult>);
 
     // Resize NNCache
-    void resize(int size);
+    void resize(int size, bool reserve_filecache = false);
 
     // Try and find an existing entry.
     bool lookup(std::uint64_t hash, Netresult & result);
@@ -100,6 +94,8 @@ private:
     SMP::RWMutex m_mutex;
 
     size_t m_size;
+    size_t m_max_cache_size;
+    size_t m_max_outfile_map_size;
 
     // Statistics
     int m_hits{0};
@@ -107,17 +103,24 @@ private:
     int m_lookups{0};
     int m_inserts{0};
 
-    class Entry {
+    struct Entry {
+        Entry(const Netresult& r)
+            : result(r) {}
+        Netresult result;  // ~ 1.4KiB
+    };
+
+    class CompressedEntry {
     public:
         Utils::bitstream compressed_policy;
         float policy_pass;
         float winrate;
 
         void get(Netresult & r) const;
+        void test_get() const;
         std::uint64_t read(std::ifstream & ifs, std::uint64_t expected_hash = 0xffff'ffff'ffff'ffffLL);
 
-        Entry() {}
-        Entry(const Netresult& r);
+        CompressedEntry() {}
+        CompressedEntry(const Netresult& r);
     };
 
     // filename of the cache file

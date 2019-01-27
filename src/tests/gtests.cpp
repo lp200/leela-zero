@@ -82,9 +82,8 @@ public:
 
         cfg_weightsfile = "../src/tests/0k.txt";
 
-        auto playouts = std::min(cfg_max_playouts, cfg_max_visits);
         auto network = std::make_unique<Network>();
-        network->initialize(playouts, cfg_weightsfile);
+        network->initialize(cfg_weightsfile);
         GTP::initialize(std::move(network));
     }
     void TearDown() {}

@@ -470,7 +470,7 @@ void Network::select_precision(int channels) {
 }
 #endif
 
-void Network::initialize(int playouts, const std::string & weightsfile) {
+void Network::initialize(const std::string & weightsfile) {
 #ifdef USE_BLAS
 #ifndef __APPLE__
 #ifdef USE_OPENBLAS
@@ -491,10 +491,6 @@ void Network::initialize(int playouts, const std::string & weightsfile) {
 #endif
 
     m_fwd_weights = std::make_shared<ForwardPipeWeights>();
-
-    // Make a guess at a good size as long as the user doesn't
-    // explicitly set a maximum memory usage.
-    m_nncache.set_size_from_playouts(playouts);
 
     // Prepare symmetry table
     for (auto s = 0; s < NUM_SYMMETRIES; ++s) {
@@ -1027,5 +1023,5 @@ size_t Network::get_estimated_cache_size() {
 }
 
 void Network::nncache_resize(int max_count) {
-    return m_nncache.set_size_from_playouts(max_count);
+    return m_nncache.resize(max_count);
 }
